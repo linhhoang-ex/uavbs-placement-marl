@@ -49,12 +49,12 @@ def raw_env(render_mode=None):
     To support the AEC API, the raw_env() function just uses the from_parallel
     function to convert from a ParallelEnv to an AEC env
     """
-    env = parallel_env(render_mode=render_mode)
+    env = paper_rock_scissors(render_mode=render_mode)
     env = parallel_to_aec(env)
     return env
 
 
-class parallel_env(ParallelEnv):
+class paper_rock_scissors(ParallelEnv):
     metadata = {"render_modes": ["human"], "name": "rps_v2"}
 
     def __init__(self, render_mode=None):
