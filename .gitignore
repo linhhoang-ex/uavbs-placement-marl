@@ -161,3 +161,6 @@ cython_debug/
 
 # Linh's test files 
 *test.*
+
+# Auto-generated files (PettingZoo)
+code/runs
