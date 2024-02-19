@@ -164,3 +164,4 @@ cython_debug/
 
 # Auto-generated files (PettingZoo)
 code/runs
+code/tmp
