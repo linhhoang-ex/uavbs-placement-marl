@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Tuple
 import os
 
 
@@ -25,7 +25,7 @@ def save_img_from_rgba_arr(
     img.show()
 
 
-def create_cmap_alpha(cmap_name):
+def create_cmap_alpha(cmap_name) -> None:
     '''Create a custom cmap in matplotlib with transperancy.
     Ref: https://stackoverflow.com/questions/51601272/python-matplotlib-heatmap-colorbar-from-transparent'''
     # get colormap
