@@ -4,7 +4,7 @@ import functools
 import gymnasium
 from gymnasium.utils import seeding
 from pettingzoo import ParallelEnv
-from pettingzoo.utils import wrappers
+# from pettingzoo.utils import wrappers
 from envs.utils import gen_hist2d
 
 
@@ -39,12 +39,13 @@ def convert_from_dB(val_dB):
 class SAGINEnv(ParallelEnv):
     metadata = {
         "name": "sagin_v0",
+        "action_masking": False
     }
 
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
                  uav_velocity=5, obs_shape=(64, 64, 4), continuous=False,
                  hotspots=None, max_episode_steps=1800, drate_threshold=20e6,
-                 local_reward_ratio=0.2, drate_reward_ratio=0.2):
+                 local_reward_ratio=0.2, drate_reward_ratio=0.2, seed=None):
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
         self.n_mbss = n_mbss    # Number of macro base stations
@@ -112,7 +113,7 @@ class SAGINEnv(ParallelEnv):
         self.terminate = False
         self.truncate = False
 
-        self._seed()
+        self._seed(seed)
 
     @functools.lru_cache(maxsize=None)
     def observation_space(self, agent):
@@ -131,13 +132,13 @@ class SAGINEnv(ParallelEnv):
     def reset(self, seed=None, options=None):
         '''Reset the environment to a starting point and set up the environment
         so that render(), step(), and observe() can be called without issues.
-        Return observations and infos for each agent after initialization.
+
+        Return observations and infos for each agent, keyed by the agent name.
         '''
         if seed is not None:
             self._seed(seed)
 
         self.agents = self.possible_agents[:]
-        self.n_steps = 0                        # no. of steps in the episode
 
         # Init hotspot areas
         if self.hotspots is None:
@@ -167,7 +168,6 @@ class SAGINEnv(ParallelEnv):
         self.terminate = False
         self.truncate = False
         self.rewards = dict(zip(self.agents, [0 for _ in self.agents]))
-        self._cumulative_rewards = dict(zip(self.agents, [0 for _ in self.agents]))
         self.terminations = dict(zip(self.agents, [False for _ in self.agents]))
         self.truncations = dict(zip(self.agents, [False for _ in self.agents]))
         self.infos = dict(zip(self.agents, [{} for _ in self.agents]))
@@ -175,50 +175,56 @@ class SAGINEnv(ParallelEnv):
         self.infos['global'] = kpis
 
         # Get observations of each agent
-        observations = {a: self.observe(a) for a in self.agents}
+        self.observations = {a: self.observe(a) for a in self.agents}
 
-        # Get dummy infos. Necessary for proper parallel_to_aec conversion
-        infos = {a: {} for a in self.agents}
+        # no. of steps elapsed in the episode, for truncation condition
+        self.n_steps = 0
 
-        return observations, infos
+        return (self.observations, self.infos)
 
     def step(self, actions: Dict[str, np.ndarray]):
         '''
-        Take an action for each agent and return a tuple of 5 dicts:
+        Receives a dictionary of actions keyed by the agent name.
+
+        Takes an action for each agent and returns a tuple of 5 dicts:
         - observations
         - rewards
         - terminations
         - truncations
         - infos
 
-        Each dict looks like {agent_0: item_0, agent_1: item_1}.
+        Each dict is keyed by the agent like {agent_0: item_0, agent_1: item_1}.
         '''
+        self.n_steps += 1
 
         # Execute actions: update new locations for all drone BSs
         self.locs['uav'] = self.get_uav_next_locs(actions)
         new_kpis = self.get_drates_and_link_assignment_greedy()
 
-        # Calculate the reward for each agent
-        rewards = self.get_rewards(new_kpis)
+        # Calculate rewards for each agent
+        self.rewards = self.get_rewards(new_kpis)
 
-        # Must be updated after calculating rewards
+        # Must be updated after calculating rewards: update .infos['global']
+        # self.infos = dict(zip(self.agents, [{} for _ in self.agents]))
         self.infos['global'] = new_kpis
 
         # Check termination conditions
-        terminations = {a: False for a in self.agents}
+        self.terminations = {agent: self.terminate for agent in self.agents}
 
         # Check truncation conditions (overwrites termination conditions)
-        self.n_step += 1
-        env_truncation = self.n_steps >= self.max_episode_steps
-        truncations = {agent: env_truncation for agent in self.agents}
+        self.truncate = self.n_steps >= self.max_episode_steps
+        self.truncations = {agent: self.truncate for agent in self.agents}
 
         # Get observations (after taking the action)
-        observations = {agent: self.observe(agent) for agent in self.agents}
+        self.observations = {agent: self.observe(agent) for agent in self.agents}
 
-        # Get dummy infos
-        infos = {agent: {} for agent in self.agents}
-
-        return observations, rewards, terminations, truncations, infos
+        return (
+            self.observations,
+            self.rewards,
+            self.terminations,
+            self.truncations,
+            self.infos
+        )
 
     def render(self):
         pass
@@ -235,7 +241,7 @@ class SAGINEnv(ParallelEnv):
         return gen_hist2d(locs_)
 
     def state(self):
-        '''Return an observation of the global environment.'''
+        '''Return a global view of the environment.'''
         return gen_hist2d(self.locs)
 
     def gen_uav_init_locs(self):
@@ -263,7 +269,7 @@ class SAGINEnv(ParallelEnv):
 
     def get_uav_next_locs(self, actions: Dict[str, np.ndarray]) -> np.ndarray:
         '''Return new locations for all drone BSs. Output shape=(2, n_uavs)'''
-        directions = [self._action_to_direction(actions[a]) for a in self.agents]
+        directions = [self._action_to_direction[actions[a]] for a in self.agents]
         directions = np.array(directions).reshape(2, -1)
         next_locs = self.locs['uav'] + directions * self.uav_velocity
         next_locs = np.clip(next_locs, -self.bound, self.bound)
