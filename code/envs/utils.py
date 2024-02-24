@@ -8,7 +8,7 @@ import os
 
 def save_img_from_rgba_arr(
     rgba_arr: np.ndarray, fpath: str = 'tmp/tmp.png',
-    figsize: Tuple = (3, 3), dpi: int = 100, transparent=True
+    figsize: Tuple = (8, 8), dpi: int = 8, transparent=True
 ) -> None:
     '''Save RGBA array (n_rows, n_cols, 4) to an image without padding.
     Output image size = figsize * dpi - 10% of matplotlib's default padding'''
@@ -52,8 +52,8 @@ def gen_hist2d(
     cmaps: Dict[str, str] = cmaps,  # color map to plot the histogram
     bound: float = 1000,            # boundary of the area, default = 1.5 km
     grid: float = 20,               # grid size of the heatmap, default = 20 m
-    figsize: Tuple = (3, 3),        # image size in inches
-    dpi: float = 100,               # dots per inch (dpi), output image ~ figsize * dpi
+    figsize: Tuple = (8, 8),        # image size in inches
+    dpi: float = 8,               # dots per inch (dpi), output image ~ figsize * dpi
 ) -> np.ndarray:                    # the heatmap of all network entities
     '''(v1.3) Convert locations of all netowrk entities (users, macro and drone BSs)
     into a 2D histogram map, viewed as an RGBA array of shape (H, W, 4).
@@ -71,7 +71,7 @@ def gen_hist2d(
         os.makedirs('tmp')
 
     # Generate 2D histogram image
-    fig = plt.figure(figsize=figsize)
+    fig = plt.figure(figsize=figsize, dpi=dpi)
     ax = fig.add_subplot(111)
     for type, coordinates in locs.items():
         grid_ = grid if type == 'user' else 1.5 * grid

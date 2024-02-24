@@ -43,7 +43,7 @@ class SAGINEnv(ParallelEnv):
     }
 
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
-                 uav_velocity=5, obs_shape=(64, 64, 4), continuous=False,
+                 uav_velocity=5, continuous=False,
                  hotspots=None, max_episode_steps=1800, drate_threshold=20e6,
                  local_reward_ratio=0.2, drate_reward_ratio=0.2, seed=None):
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
@@ -61,7 +61,7 @@ class SAGINEnv(ParallelEnv):
         self.drate_rw_ratio = drate_reward_ratio
         self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
 
-        self.obs_shape = obs_shape      # observation shape of one agent
+        self.obs_shape = gen_hist2d(locs={}).shape  # observation shape of one agent
         self.continuous = continuous    # action space: continuous/discrete
 
         assert self.n_uavs > 1, "n_uavs must be greater than 1 (multi-agent)"
@@ -161,6 +161,7 @@ class SAGINEnv(ParallelEnv):
             'mbs': np.array([1000, 1000]).reshape(2, -1),
             'uav': self.gen_uav_init_locs()
         }
+        self.uav_init_locs = self.locs['uav']
         assert np.any(self.locs['user'] <= self.bound)
         assert np.any(self.locs['user'] >= -self.bound)
 
@@ -248,7 +249,7 @@ class SAGINEnv(ParallelEnv):
         '''Generate initial locations of all drroneBSs. Output shape = (2, n_uavs).'''
         xlocs = self.np_random.uniform(self.bound - 100, self.bound - 5, self.n_uavs)
         ylocs = self.np_random.uniform(self.bound - 100, self.bound - 5, self.n_uavs)
-        return np.asarray([xlocs, ylocs])
+        return np.round(np.asarray([xlocs, ylocs]))
 
     def gen_user_init_locs(
         self,
@@ -335,7 +336,7 @@ class SAGINEnv(ParallelEnv):
         - 'bs_mapping': indexes of the assigned BS for each user, shape=(n_users,)
         - 'drate_avg': average data rate of all users
         - 'n_satisfied': number of users with satisfied data rates
-        - 'avg_drates_by_uavbs': average data rates provided by each drone BS, shape=(n_uavs,) 
+        - 'avg_drates_by_uavbs': average data rates provided by each drone BS, shape=(n_uavs,)
         '''
         user_locs = self.locs['user']
         bs_locs = np.concatenate((self.locs['mbs'], self.locs['uav']), axis=-1)
