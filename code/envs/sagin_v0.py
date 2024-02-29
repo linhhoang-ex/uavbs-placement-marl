@@ -20,7 +20,7 @@ def get_horizontal_dist(
 
 def get_drate_bps(
     snr_db: np.ndarray,         # SNR [dB] of all users, shape=(n_users,)
-    bw_mhz: np.ndarray = 20,    # bandwidth in MHz for each user, shape=(n_users,)
+    bw_mhz: np.ndarray = 15,    # bandwidth in MHz for each user, shape=(n_users,)
 ) -> np.ndarray:                # data rate [bps] for each user, shape = n_users
     '''Calculate the data rate [bps] via the SNR [dB] and channel bandwidth [MHz]'''
     return bw_mhz * 1e6 * np.log2(1 + convert_from_dB(snr_db))
@@ -43,9 +43,9 @@ class SAGINEnv(ParallelEnv):
     }
 
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
-                 uav_velocity=5, continuous=False,
+                 uav_velocity=50, continuous=False,
                  hotspots=None, max_episode_steps=1800, drate_threshold=20e6,
-                 local_reward_ratio=0.2, drate_reward_ratio=0.2, seed=None):
+                 local_reward_ratio=0.2, drate_reward_ratio=1, seed=42):
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
         self.n_mbss = n_mbss    # Number of macro base stations
@@ -158,12 +158,11 @@ class SAGINEnv(ParallelEnv):
         # Shape of location arrays: (2, n_users), (2, n_mbss), and (2, n_uavs)
         self.locs = {
             'user': self.gen_user_init_locs(self.hotspots),
-            'mbs': np.array([1000, 1000]).reshape(2, -1),
+            'mbs': np.array([self.bound, self.bound]).reshape(2, -1),
             'uav': self.gen_uav_init_locs()
         }
         self.uav_init_locs = self.locs['uav']
-        assert np.any(self.locs['user'] <= self.bound)
-        assert np.any(self.locs['user'] >= -self.bound)
+        self.check_locations_in_bound()
 
         # Initialization for step() method
         self.terminate = False
@@ -201,6 +200,7 @@ class SAGINEnv(ParallelEnv):
         # Execute actions: update new locations for all drone BSs
         self.locs['uav'] = self.get_uav_next_locs(actions)
         new_kpis = self.get_drates_and_link_assignment_greedy()
+        self.check_locations_in_bound()
 
         # Calculate rewards for each agent
         self.rewards = self.get_rewards(new_kpis)
@@ -238,7 +238,8 @@ class SAGINEnv(ParallelEnv):
         '''Return the observation an agent currently can make.'''
         i = self.agent_name_mapping[agent]
         locs_ = self.locs.copy()
-        locs_['self'] = self.locs['uav'][:, i].reshape(2, -1)
+        locs_['self'] = locs_['uav'][:, i].reshape(2, -1)
+        locs_['uav'] = np.delete(locs_['uav'], i, 1)
         return gen_hist2d(locs_)
 
     def state(self):
@@ -247,8 +248,8 @@ class SAGINEnv(ParallelEnv):
 
     def gen_uav_init_locs(self):
         '''Generate initial locations of all drroneBSs. Output shape = (2, n_uavs).'''
-        xlocs = self.np_random.uniform(self.bound - 100, self.bound - 5, self.n_uavs)
-        ylocs = self.np_random.uniform(self.bound - 100, self.bound - 5, self.n_uavs)
+        xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+        ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
         return np.round(np.asarray([xlocs, ylocs]))
 
     def gen_user_init_locs(
@@ -263,10 +264,10 @@ class SAGINEnv(ParallelEnv):
             xlocs = np.concatenate((xlocs, self.np_random.normal(x0, stddev, nusers)))
             ylocs = np.concatenate((ylocs, self.np_random.normal(y0, stddev, nusers)))
 
-        for loc in [xlocs, ylocs]:
-            loc = np.clip(loc, -self.bound, self.bound)
+        locs = np.asarray([xlocs, ylocs])
+        locs = np.clip(locs, -self.bound, self.bound)
 
-        return np.asarray([xlocs, ylocs])
+        return locs
 
     def get_uav_next_locs(self, actions: Dict[str, np.ndarray]) -> np.ndarray:
         '''Return new locations for all drone BSs. Output shape=(2, n_uavs)'''
@@ -282,7 +283,7 @@ class SAGINEnv(ParallelEnv):
         logF_db: np.float_ = 2,     # std var for the log-normally distributed shadowing
         noise_db: np.float_ = -90,  # total noise power in dBm
         pTx_dBm: np.float_ = 46,    # transmit power in dBm of the macro BS
-        n_samples: np.float_ = 100  # no. of samples/s for SNR w/ coherent time ~40ms @fc=2GHz, v=15m/s
+        n_samples: np.float_ = 250  # no. of samples/s for SNR w/ coherent time ~40ms @fc=2GHz, v=15m/s
     ) -> Tuple[Any]:     # snr [dB] for each user, shape=(n_users)
         '''Calculate the path loss [dB] and SNR [dB] for each user via the macro BS's link.
 
@@ -290,6 +291,7 @@ class SAGINEnv(ParallelEnv):
         - https://www.arib.or.jp/english/html/overview/doc/STD-T63v9_20/5_Appendix/Rel5/25/25942-530.pdf
         - https://en.wikipedia.org/wiki/Coherence_time_(communications_systems) (coherent time)
         '''
+        h_dist = np.maximum(h_dist, 1)          # at leat 1 m (the reference dist), avoid log(0)
         p_loss_mean_db = 128.1 + 37.6 * np.log10(h_dist / 1e3)
         fading_db = self.np_random.normal(
             loc=0, scale=logF_db, size=(len(h_dist), n_samples)
@@ -308,7 +310,7 @@ class SAGINEnv(ParallelEnv):
         pTx_dBm: np.float_ = 30,        # transmit power in dBm of the drone BS
         kappa: np.float_ = 50,          # coefficient for the Rician channel effect
         p_loss_coeff: np.float_ = 2.7,  # path loss's coefficient
-        n_samples: np.float_ = 100      # no. of samples/s for SNR w/ coherent time ~15ms @fc=5.8GHz, v=15m/s
+        n_samples: np.float_ = 667      # no. of samples/s for SNR w/ coherent time ~15ms @fc=5.8GHz, v=15m/s
     ) -> Tuple[Any]:
         '''Calculate the path loss [dB] and SNR [dB] for each user via the drone BS's link.
 
@@ -380,12 +382,12 @@ class SAGINEnv(ParallelEnv):
 
     def get_global_reward(self, new_kpis: Dict[str, np.ndarray]) -> float:
         old_kpis = self.infos['global']
-        if new_kpis['n_satisfied'] > old_kpis['n_satisfied']:
-            n_satisfied_score = 1
-        elif new_kpis['n_satisfied'] < old_kpis['n_satisfied']:
-            n_satisfied_score = -1
-        else:
-            n_satisfied_score = 0
+        # if new_kpis['n_satisfied'] > old_kpis['n_satisfied']:
+        #     n_satisfied_score = 1
+        # elif new_kpis['n_satisfied'] < old_kpis['n_satisfied']:
+        #     n_satisfied_score = -1
+        # else:
+        #     n_satisfied_score = 0
 
         if new_kpis['drate_avg'] > old_kpis['drate_avg']:
             drate_score = 1
@@ -394,13 +396,15 @@ class SAGINEnv(ParallelEnv):
         else:
             drate_score = 0
 
-        return (1 - self.drate_rw_ratio) * n_satisfied_score\
-            + self.drate_rw_ratio * drate_score
+        # return (1 - self.drate_rw_ratio) * n_satisfied_score\
+        #     + self.drate_rw_ratio * drate_score
+
+        return drate_score
 
     def get_local_rewards(self, new_kpis: Dict[str, np.ndarray]) -> np.ndarray:
         old_kpis = self.infos['global']
         n_users_scores = np.zeros(self.n_uavs)
-        drate_scores = np.zeros(self.n_uavs)
+        # drate_scores = np.zeros(self.n_uavs)
         for i in range(self.n_uavs):
             if new_kpis['n_users_by_uavbs'][i] > old_kpis['n_users_by_uavbs'][i]:
                 n_users_scores[i] = 1
@@ -409,15 +413,17 @@ class SAGINEnv(ParallelEnv):
             else:
                 n_users_scores[i] = 0
 
-            if new_kpis['avg_drates_by_uavbs'][i] > old_kpis['avg_drates_by_uavbs'][i]:
-                drate_scores[i] = 1
-            elif new_kpis['avg_drates_by_uavbs'][i] < old_kpis['avg_drates_by_uavbs'][i]:
-                drate_scores[i] = -1
-            else:
-                drate_scores[i] = 0
+        #     if new_kpis['avg_drates_by_uavbs'][i] > old_kpis['avg_drates_by_uavbs'][i]:
+        #         drate_scores[i] = 1
+        #     elif new_kpis['avg_drates_by_uavbs'][i] < old_kpis['avg_drates_by_uavbs'][i]:
+        #         drate_scores[i] = -1
+        #     else:
+        #         drate_scores[i] = 0
 
-        return (1 - self.drate_rw_ratio) * n_users_scores\
-            + self.drate_rw_ratio * drate_scores
+        # return (1 - self.drate_rw_ratio) * n_users_scores\
+        #     + self.drate_rw_ratio * drate_scores
+
+        return n_users_scores
 
     def get_rewards(self, new_kpis: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         global_rewards = self.get_global_reward(new_kpis)
@@ -426,3 +432,8 @@ class SAGINEnv(ParallelEnv):
             + self.local_rw_ratio * local_rewards
 
         return dict(zip(self.agents, rewards))
+
+    def check_locations_in_bound(self):
+        for val in self.locs.values():
+            assert np.all(val <= self.bound)
+            assert np.all(val >= -self.bound)
