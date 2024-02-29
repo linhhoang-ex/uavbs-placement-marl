@@ -8,7 +8,7 @@ import os
 
 def save_img_from_rgba_arr(
     rgba_arr: np.ndarray, fpath: str = 'tmp/tmp.png',
-    figsize: Tuple = (8, 8), dpi: int = 8, transparent=True
+    figsize: Tuple = (4, 4), dpi: int = 64, transparent=True
 ) -> None:
     '''Save RGBA array (n_rows, n_cols, 4) to an image without padding.
     Output image size = figsize * dpi - 10% of matplotlib's default padding'''
@@ -18,7 +18,7 @@ def save_img_from_rgba_arr(
     plt.tight_layout()
     plt.savefig(fpath, bbox_inches='tight', pad_inches=0, dpi=dpi, transparent=transparent)
     plt.close()
-    print(f"Image saved to {fpath}")
+    print(f"Image saved to {os.path.join(os.getcwd(), fpath)}")
 
     from PIL import Image
     img = Image.open(fpath)
@@ -51,9 +51,10 @@ def gen_hist2d(
     locs: Dict[str, np.ndarray],    # locations of users, macro BSs, and drone BSs
     cmaps: Dict[str, str] = cmaps,  # color map to plot the histogram
     bound: float = 1000,            # boundary of the area, default = 1.5 km
-    grid: float = 20,               # grid size of the heatmap, default = 20 m
-    figsize: Tuple = (8, 8),        # image size in inches
-    dpi: float = 8,               # dots per inch (dpi), output image ~ figsize * dpi
+    grid: float = 50,               # grid size of the heatmap, default = 20 m
+    grid_norm: float = 5,           # normalization for # of users in a grid
+    figsize: Tuple = (4, 4),        # image size in inches
+    dpi: float = 64,               # dots per inch (dpi), output image ~ figsize * dpi
 ) -> np.ndarray:                    # the heatmap of all network entities
     '''(v1.3) Convert locations of all netowrk entities (users, macro and drone BSs)
     into a 2D histogram map, viewed as an RGBA array of shape (H, W, 4).
@@ -73,12 +74,21 @@ def gen_hist2d(
     # Generate 2D histogram image
     fig = plt.figure(figsize=figsize, dpi=dpi)
     ax = fig.add_subplot(111)
-    for type, coordinates in locs.items():
-        grid_ = grid if type == 'user' else 1.5 * grid
-        ax.hist2d(x=coordinates[0, :], y=coordinates[1, :],
-                  bins=[np.arange(-bound - 50, bound + 50, grid_),
-                        np.arange(-bound - 50, bound + 50, grid_)],
-                  cmap=f"{cmaps[type]}_alpha")    # plt.cm.Greys, 'Greys', 'Reds', 'Blues'
+    if locs != {}:
+        plt_order = ['user', 'mbs', 'uav', 'self']
+        # for type, coordinates in locs.items():
+        for type in plt_order:
+            coordinates = locs[type]
+            if type == 'user':
+                norm = matplotlib.colors.Normalize(vmin=0, vmax=grid_norm, clip=True)
+                grid_ = grid
+            else:
+                norm = None
+                grid_ = grid
+            ax.hist2d(x=coordinates[0, :], y=coordinates[1, :],
+                      bins=[np.arange(-bound, bound + grid_, grid_),
+                            np.arange(-bound, bound + grid_, grid_)],
+                      cmap=f"{cmaps[type]}_alpha", norm=norm)
     ax.axis("off")              # turns off axes
     ax.margins(0, 0)            # turn of margins
     for item in [fig, ax]:      # turn of facecolor
