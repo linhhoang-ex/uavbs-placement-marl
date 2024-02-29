@@ -43,7 +43,7 @@ class SAGINEnv(ParallelEnv):
     }
 
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
-                 uav_velocity=50, continuous=False,
+                 uav_velocity=25, continuous=False,
                  hotspots=None, max_episode_steps=1800, drate_threshold=20e6,
                  local_reward_ratio=0.2, drate_reward_ratio=1, seed=42):
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
