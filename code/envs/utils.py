@@ -72,8 +72,8 @@ def gen_hist2d(
         os.makedirs('tmp')
 
     # Generate 2D histogram image
-    fig = plt.figure(figsize=figsize, dpi=dpi)
-    ax = fig.add_subplot(111)
+    fig = plt.figure(figsize=figsize, dpi=dpi, num=1, clear=True)
+    ax = plt.gca()
     if locs != {}:
         plt_order = ['user', 'mbs', 'uav', 'self']
         # for type, coordinates in locs.items():
@@ -96,7 +96,10 @@ def gen_hist2d(
     fig.tight_layout(pad=0)     # remove the padding (white space around the Axes)
     fig.canvas.draw()           # draw the canvas, cache the renderer
     rgba_arr = fig.canvas.buffer_rgba()     # shape = (H, W, 4)
-    plt.close()
+    # plt.cla()
+    # plt.clf()
+    # fig.clear()
+    # plt.close('all')
 
     '''Solution 2: using canvas.tostring_argb()'''
     # hm = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
