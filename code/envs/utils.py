@@ -109,4 +109,4 @@ def gen_hist2d(
     # hm_rgba[:,:,:3] = hm[:,:,1:]; hm_rgba[:,:,3] = hm[:,:,0]    # convert to RGBA
     # plt.close()
 
-    return np.asarray(rgba_arr)
+    return np.array(rgba_arr, copy=True)
