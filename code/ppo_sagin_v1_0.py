@@ -173,9 +173,7 @@ if __name__ == "__main__":
             rb_advantages = torch.zeros_like(rb_rewards).to(device)
             for t in reversed(range(end_step)):
                 delta = (
-                    rb_rewards[t]
-                    + gamma * rb_values[t + 1] * rb_terms[t + 1]
-                    - rb_values[t]
+                    rb_rewards[t] + gamma * rb_values[t + 1] * rb_terms[t + 1] - rb_values[t]
                 )
                 rb_advantages[t] = delta + gamma * gamma * rb_advantages[t + 1]
             rb_returns = rb_advantages + rb_values
