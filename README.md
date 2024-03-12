@@ -1,19 +1,22 @@
-# # SAGINEnv_V1.0
+### SAGINEnv_V0
 
-Observation: 
+Implement using the parallel environment template.
 
-- normalized location of all users
+### SAGINEnv_V1.0
+
+Implement using the AEC environment template -> convert to a parallel env using PettingZoo's wrapper: parallel_wrapper_fn().
+
+### SAGINEnv_V1.1
+
+Same as the SAGINEnv_V1.0, except that the observation of the agent is flattened.
+
+Observation:
+
+- a heatmap of the user distribution being flattened
 - normalized location of the macro BS
 - normalized location of all drone BSs
 
-Actions: 
-
-- 0: move north
-- 1: move west
-- 2: move south
-- 3: move east
-
-Reward: 
+### Points to be considered
 
 If the distance to the mBS > the remaining distance that the UAV can travel
 
@@ -26,8 +29,4 @@ If the distance to the mBS > the remaining distance that the UAV can travel
     (i.e., distance to the mBS > the remaining distance that the UAV can travel)
 - 0 if the # of satisfied users is unchanged
 
-
-Some points to be considered:
-
-- each agent receives a reward from the environment
-- all agents have the same observation
+Otherwise, use action masking to force the UAV to return to the initial location.
