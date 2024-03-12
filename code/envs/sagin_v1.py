@@ -6,6 +6,7 @@ from gymnasium.utils import seeding
 from pettingzoo import AECEnv
 from pettingzoo.utils import agent_selector, wrappers
 from pettingzoo.utils.conversions import parallel_wrapper_fn
+import matplotlib.pyplot as plt
 from envs.utils import gen_hist2d
 
 
@@ -52,7 +53,7 @@ parallel_env = parallel_wrapper_fn(env)
 
 class raw_env(AECEnv):
     metadata = {
-        "name": "sagin_v1",
+        "name": "sagin_v1.0",
         "description": "AEC version (turn-based games)",
         "render_modes": ["rgb_array"],
         "is_parallelizable": True,
@@ -60,7 +61,7 @@ class raw_env(AECEnv):
     }
 
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
-                 uav_velocity=25, continuous=False,
+                 uav_velocity=25, continuous=False, render_mode=None,
                  hotspots=None, max_cycles=1800, drate_threshold=20e6,
                  local_reward_ratio=0, drate_reward_ratio=0, seed=42):
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
@@ -82,6 +83,7 @@ class raw_env(AECEnv):
 
         self.obs_shape = gen_hist2d(locs={}).shape  # observation shape of one agent
         self.continuous = continuous    # action space: continuous/discrete
+        self.render_mode = render_mode
 
         assert self.n_uavs > 1, "n_uavs must be greater than 1 (multi-agent)"
 
@@ -246,7 +248,7 @@ class raw_env(AECEnv):
 
     def close(self):
         '''Close any resources that should be released.'''
-        pass
+        plt.close()
 
     def observe(self, agent):
         '''Return the observation an agent currently can make.'''
@@ -270,14 +272,25 @@ class raw_env(AECEnv):
         # mask = drates_mbs < self.drate_threshold
 
         # Option 4: UAV-BS see users with unsatisfied data rates from the mBS within 700m
-        drates_mbs = self.infos['global']['drates_map'][0]
-        drates_uav_alt = self.infos['global']['drates_map'][1:, :].copy()
-        drates_uav_alt = np.delete(drates_uav_alt, i, 0)
-        drates_uav_alt = np.max(drates_uav_alt, axis=0)
+        # drates_mbs = self.infos['global']['drates_map'][0]
+        # drates_uav_alt = self.infos['global']['drates_map'][1:, :].copy()
+        # drates_uav_alt = np.delete(drates_uav_alt, i, 0)
+        # drates_uav_alt = np.max(drates_uav_alt, axis=0)
+        # h_dist = get_horizontal_dist(locs_['self'], locs_['user'])
+        # mask = drates_mbs < self.drate_threshold        # not satisfied with the mBS
+        # mask &= drates_uav_alt < self.drate_threshold   # not satisfied with other droneBSs
+        # mask &= h_dist <= 700
+
+        # Option 5: UAV-BS see its users and other users within 1000 m with
+        # unsatisfied data rates from the mBS and all other drone BSs in higher priorities
+        assert self.n_mbss == 1, "Currently support one macro BS only"
+        mapping = self.infos['global']['bs_mapping'].copy()
+        drates_alt = self.infos['global']['drates_map'][:i + 1, :].copy()
+        drates_alt = np.max(drates_alt, axis=0)
         h_dist = get_horizontal_dist(locs_['self'], locs_['user'])
-        mask = drates_mbs < self.drate_threshold        # not satisfied with the mBS
-        mask &= drates_uav_alt < self.drate_threshold   # not satisfied with other droneBSs
-        mask &= h_dist <= 700
+        mask = drates_alt < self.drate_threshold   # not satisfied with the mBS and other droneBSs in higher priority
+        mask &= h_dist <= 1000
+        mask |= (mapping - self.n_mbss) == i
 
         locs_['user'] = locs_['user'][:, mask]
 
@@ -398,20 +411,29 @@ class raw_env(AECEnv):
                 snr_ = self.get_snr_uavbs_db(h_dist_)[0]
             drates_map[i, :] = get_drate_bps(snr_)
 
-        # (V1.0) User association: assign users to mBS/droneBS with the strongest signal
+        # V1.0 (User association): assign users to mBS/droneBS with the strongest signal
         # drates = np.max(drates_map, axis=0)
         # bs_mapping = np.argmax(drates_map, axis=0)
 
-        # V1.1: only assign to droneBS if the mBS's signal is not stronog enough
-        drates_mbs = drates_map[:self.n_mbss, :]
-        drates = np.max(drates_mbs, axis=0)
-        bs_mapping = np.argmax(drates_mbs, axis=0)
-        drates_uav = drates_map[self.n_mbss:, :]
-        mask1 = drates < self.drate_threshold
-        mask2 = drates < np.max(drates_uav, axis=0)
-        mask = mask1 & mask2
-        drates[mask] = np.max(drates_uav[:, mask], axis=0)
-        bs_mapping[mask] = self.n_mbss + np.argmax(drates_uav[:, mask], axis=0)
+        # V1.1 (User association): only assign to droneBS if the mBS's signal is not stronog enough
+        # drates_mbs = drates_map[:self.n_mbss, :]
+        # drates = np.max(drates_mbs, axis=0)
+        # bs_mapping = np.argmax(drates_mbs, axis=0)
+        # drates_uav = drates_map[self.n_mbss:, :]
+        # mask1 = drates < self.drate_threshold
+        # mask2 = drates < np.max(drates_uav, axis=0)
+        # mask = mask1 & mask2
+        # drates[mask] = np.max(drates_uav[:, mask], axis=0)
+        # bs_mapping[mask] = self.n_mbss + np.argmax(drates_uav[:, mask], axis=0)
+
+        # V1.2 (User association): only assign to a droneBS if the signal
+        # from the mBS and all previous droneBSs is not stronog enough
+        drates = np.max(drates_map, axis=0)
+        bs_mapping = np.argmax(drates_map, axis=0)
+        for i in range(self.n_users):
+            if sum(drates_map[:, i] >= self.drate_threshold) > 1:
+                bs_mapping[i] = np.argmax(drates_map[:, i] >= self.drate_threshold)
+                drates[i] = drates_map[bs_mapping[i], i]
 
         # For tracking KPIs
         drate_avg = drates.mean()
@@ -457,9 +479,9 @@ class raw_env(AECEnv):
         # return (1 - self.drate_rw_ratio) * n_satisfied_score\
         #     + self.drate_rw_ratio * drate_score
 
-        n_satisfied_score = new_kpis['n_satisfied'] - old_kpis['n_satisfied']
+        return new_kpis['n_satisfied'] - old_kpis['n_satisfied']
 
-        return n_satisfied_score
+        # return n_satisfied_score
 
     def get_local_rewards(self, new_kpis: Dict[str, np.ndarray]) -> np.ndarray:
         old_kpis = self.infos['global']
@@ -485,6 +507,8 @@ class raw_env(AECEnv):
         #     + self.drate_rw_ratio * drate_scores
 
         return new_kpis['n_users_by_uavbs'] - old_kpis['n_users_by_uavbs']
+
+        # return n_users_scores
 
     def get_rewards(self, new_kpis: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         global_rewards = self.get_global_reward(new_kpis)
