@@ -162,6 +162,7 @@ cython_debug/
 # Linh's test files 
 *test.*
 
-# Auto-generated files (PettingZoo)
+# Auto-generated (PettingZoo) and temporary files
 code/runs
 code/tmp
+code/trained_agents/2024*
