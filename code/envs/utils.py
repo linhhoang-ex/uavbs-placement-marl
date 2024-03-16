@@ -5,6 +5,8 @@ from matplotlib.colors import LinearSegmentedColormap
 from typing import Dict, Tuple
 import os
 
+rng = np.random.default_rng()
+
 
 def save_img_from_rgba_arr(
     rgba_arr: np.ndarray, fpath: str = 'tmp/tmp.png',
@@ -110,3 +112,46 @@ def gen_hist2d(
     # plt.close()
 
     return np.array(rgba_arr, copy=True)
+
+
+def get_obs_flattened(
+    locs: Dict[str, np.ndarray],    # locations of users, macro BSs, and drone BSs
+    bound: float = 1000,            # boundary of the area, default = 1.5 km
+    grid_size: float = 50,          # grid size of the heatmap, default = 20 m
+    grid_norm: float = 20,          # normalization for # of users in a grid
+    **kwargs
+) -> np.ndarray:                    # the heatmap of all network entities
+    obs = list()
+    n_grids = int(1 + np.floor((2 * bound - 1) / grid_size))
+    # hm = np.zeros(shape=(n_grids, n_grids))
+    hm = 1e-6 * rng.uniform(size=(n_grids, n_grids))         # random noise
+    keys = ['self', 'uav', 'mbs']
+
+    if locs == {}:
+        return rng.uniform(size=(n_grids * n_grids + 2 * (kwargs['n_uavs'] + kwargs['n_mbss']),))
+
+    for key in keys:
+        for i in range(locs[key].shape[-1]):
+            obs.append(get_xloc_norm(xloc=locs[key][0, i], bound=bound, grid_size=grid_size))
+            obs.append(get_yloc_norm(yloc=locs[key][1, i], bound=bound, grid_size=grid_size))
+    xlocs = np.clip(locs['user'][0], -bound + 1, bound - 1)
+    ylocs = np.clip(locs['user'][1], -bound + 1, bound - 1)
+    for i in range(len(xlocs)):
+        col = int(np.floor((xlocs[i] + bound) / grid_size))
+        row = int(np.floor((bound - ylocs[i]) / grid_size))
+        hm[row, col] += 1
+    obs = np.append(obs, hm.flatten() / grid_norm)
+
+    return obs
+
+
+def get_xloc_norm(xloc, bound: float = 1000, grid_size: float = 100) -> np.ndarray:
+    xloc = np.clip(xloc, -bound + 1, bound - 1)
+    '''Normalization with point (0,0) in the top-left corner.'''
+    return (xloc + bound) / (2 * bound - 1)
+
+
+def get_yloc_norm(yloc, bound: float = 1000, grid_size: float = 100) -> np.ndarray:
+    '''Normalization with point (0,0) in the top-left corner.'''
+    yloc = np.clip(yloc, -bound + 1, bound - 1)
+    return (bound - yloc) / (2 * bound - 1)
