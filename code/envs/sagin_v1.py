@@ -1,13 +1,14 @@
 import numpy as np
 from typing import Dict, Any, Tuple, List
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
 # import functools
 import gymnasium
 from gymnasium.utils import seeding
 from pettingzoo import AECEnv
 from pettingzoo.utils import agent_selector, wrappers
 from pettingzoo.utils.conversions import parallel_wrapper_fn
-import matplotlib.pyplot as plt
-from envs.utils import gen_hist2d
+from envs.utils import gen_hist2d, get_obs_flattened
 
 
 def get_horizontal_dist(
@@ -20,12 +21,52 @@ def get_horizontal_dist(
     return np.sqrt(np.sum(delta**2, axis=0))
 
 
+def kmeans_clustering(
+    user_locs: np.ndarray,
+    init_bs_locs: Any,
+    n_clusters: int,
+) -> Tuple[Any]:
+    '''Cluster users in to clusters using KMeans Clustering.
+
+    Parameters
+    ----------
+        user_locs: positions of all users, shape=(2, n_users)
+        init_bs_locs: init positions of all BSs, shape=(2, n_bss)
+
+    Returns
+    -------
+        cluster_centers_: ndarray of shape (2, n_clusters)
+            Coordinates of cluster centers
+        labels_: ndarray of shape (n_samples,)
+            Labels of each point
+        inertia_: float
+            Sum of squared distances of samples to their closest cluster center.
+
+    References
+    ---------
+    https://scikit-learn.org/stable/modules/generated/sklearn.cluster.KMeans.html
+    '''
+    kmeans = KMeans(n_clusters=n_clusters,
+                    init=init_bs_locs.transpose(),
+                    verbose=0
+                    ).fit(user_locs.transpose())
+
+    return kmeans.cluster_centers_.transpose(), kmeans.labels_, kmeans.inertia_
+
+
 def get_drate_bps(
-    snr_db: np.ndarray,         # SNR [dB] of all users, shape=(n_users,)
-    bw_mhz: np.ndarray = 15,    # bandwidth in MHz for each user, shape=(n_users,)
+    snr_db: np.ndarray,             # SNR [dB] of all users, shape=(n_users,)
+    type: str,                      # in ['uav', 'mbs']
+    mbs_bw_mhz: np.ndarray = 20,    # bandwidth in MHz for the macro BS's link
+    uav_bw_mhz: np.ndarray = 20,    # bandwidth in MHz for the drone BS's link
 ) -> np.ndarray:                # data rate [bps] for each user, shape = n_users
     '''Calculate the data rate [bps] via the SNR [dB] and channel bandwidth [MHz]'''
-    return bw_mhz * 1e6 * np.log2(1 + convert_from_dB(snr_db))
+    if type == 'uav':
+        return uav_bw_mhz * 1e6 * np.log2(1 + convert_from_dB(snr_db))
+    elif type == 'mbs':
+        return mbs_bw_mhz * 1e6 * np.log2(1 + convert_from_dB(snr_db))
+    else:
+        raise ValueError("type can only be 'mbs' or 'uav'")
 
 
 def to_dB(val):
@@ -53,7 +94,7 @@ parallel_env = parallel_wrapper_fn(env)
 
 class raw_env(AECEnv):
     metadata = {
-        "name": "sagin_v1.0",
+        "name": "sagin_v1.1",
         "description": "AEC version (turn-based games)",
         "render_modes": ["rgb_array"],
         "is_parallelizable": True,
@@ -63,7 +104,7 @@ class raw_env(AECEnv):
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
                  uav_velocity=25, continuous=False, render_mode=None,
                  hotspots=None, max_cycles=1800, drate_threshold=20e6,
-                 local_reward_ratio=0, drate_reward_ratio=0, seed=42):
+                 local_reward_ratio=0.2, drate_reward_ratio=0, seed=42):
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
         self.n_mbss = n_mbss    # Number of macro base stations
@@ -81,7 +122,11 @@ class raw_env(AECEnv):
         self.drate_rw_ratio = drate_reward_ratio
         self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
 
-        self.obs_shape = gen_hist2d(locs={}).shape  # observation shape of one agent
+        self.obs_shape = get_obs_flattened(
+            locs={},
+            n_uavs=self.n_uavs,
+            n_mbss=self.n_mbss
+        ).shape         # observation shape of one agent
         self.continuous = continuous    # action space: continuous/discrete
         self.render_mode = render_mode
 
@@ -93,9 +138,9 @@ class raw_env(AECEnv):
                 [
                     gymnasium.spaces.Box(
                         low=0,
-                        high=255,
+                        high=1,
                         shape=self.obs_shape,
-                        dtype=np.uint8,
+                        dtype=np.float64,
                     )
                 ] * self.n_uavs,
             )
@@ -158,26 +203,35 @@ class raw_env(AECEnv):
             self._seed(seed)
 
         # Init hotspot areas
+        rng = self.np_random
         if self.hotspots is None:
             self.hotspots = [
-                (0, 0, 600, 100),               # (x0, y0, stddev, n_users)
+                (0, 0, 1000, 100),               # (x0, y0, stddev, n_users)
+                (1000, 1000, 1000, 200),
+                (rng.normal(-500, 200), rng.normal(500, 200), 300, 50),
+                (rng.normal(-500, 200), rng.normal(-500, 200), 300, 50),
+                (rng.normal(500, 200), rng.normal(-500, 200), 300, 50),
+                (rng.normal(500, 200), rng.normal(500, 200), 300, 50)
             ]
-            for _ in range(3):
-                self.hotspots.append((
-                    self.np_random.uniform(-1000, 1000),        # x0
-                    self.np_random.uniform(-1000, 1000),        # y0
-                    200,                                        # stddev
-                    100                                         # n_users
-                ))
-        self.n_users = np.array([hotspot[-1] for hotspot in self.hotspots]).sum()
+            # for _ in range(3):
+            #     self.hotspots.append((
+            #         self.np_random.uniform(-800, 800),      # x0
+            #         self.np_random.uniform(-800, 800),      # y0
+            #         200,                                    # stddev
+            #         50                                      # n_users
+            #     ))
 
         # Init locations of all network entities (users, macroBSs, and droneBSs)
         # Shape of location arrays: (2, n_users), (2, n_mbss), and (2, n_uavs)
         self.locs = {
             'user': self.gen_user_init_locs(self.hotspots),
-            'mbs': self.gen_mbs_loc(),
-            'uav': self.gen_uav_init_locs()
+            'mbs': self.gen_mbs_loc()
         }
+        self.locs['uav'] = self.gen_uav_init_locs(
+            user_locs=self.locs['user'],
+            mbs_locs=self.locs['mbs']
+        )
+        self.n_users = self.locs['user'].shape[-1]
         self.uav_init_locs = self.locs['uav']
         self.check_locations_in_bound()
 
@@ -271,44 +325,80 @@ class raw_env(AECEnv):
         # drates_mbs = self.infos['global']['drates_map'][0]
         # mask = drates_mbs < self.drate_threshold
 
-        # Option 4: UAV-BS see users with unsatisfied data rates from the mBS within 700m
-        # drates_mbs = self.infos['global']['drates_map'][0]
-        # drates_uav_alt = self.infos['global']['drates_map'][1:, :].copy()
-        # drates_uav_alt = np.delete(drates_uav_alt, i, 0)
-        # drates_uav_alt = np.max(drates_uav_alt, axis=0)
-        # h_dist = get_horizontal_dist(locs_['self'], locs_['user'])
-        # mask = drates_mbs < self.drate_threshold        # not satisfied with the mBS
-        # mask &= drates_uav_alt < self.drate_threshold   # not satisfied with other droneBSs
-        # mask &= h_dist <= 700
-
-        # Option 5: UAV-BS see its users and other users within 1000 m with
-        # unsatisfied data rates from the mBS and all other drone BSs in higher priorities
+        # Option 4: UAV-BS see users with unsatisfied data rates from the mBS and
+        # other drone BSs (optional: within 700m)
         assert self.n_mbss == 1, "Currently support one macro BS only"
         mapping = self.infos['global']['bs_mapping'].copy()
-        drates_alt = self.infos['global']['drates_map'][:i + 1, :].copy()
-        drates_alt = np.max(drates_alt, axis=0)
-        h_dist = get_horizontal_dist(locs_['self'], locs_['user'])
-        mask = drates_alt < self.drate_threshold   # not satisfied with the mBS and other droneBSs in higher priority
-        mask &= h_dist <= 1000
+        drates_mbs = self.infos['global']['drates_map'][0]
+        drates_uav_alt = self.infos['global']['drates_map'][1:, :].copy()
+        drates_uav_alt = np.delete(drates_uav_alt, i, 0)
+        drates_uav_alt = np.max(drates_uav_alt, axis=0)
+        # h_dist = get_horizontal_dist(locs_['self'], locs_['user'])
+        mask = drates_mbs < self.drate_threshold        # not satisfied with the mBS
+        mask &= drates_uav_alt < self.drate_threshold   # not satisfied with other droneBSs
+        # mask &= h_dist <= 700
         mask |= (mapping - self.n_mbss) == i
+
+        # Option 5: UAV-BS see its users and other users (optional: within 1000m) with
+        # unsatisfied data rates from the mBS and all other drone BSs in higher priorities
+        # assert self.n_mbss == 1, "Currently support one macro BS only"
+        # mapping = self.infos['global']['bs_mapping'].copy()
+        # drates_alt = self.infos['global']['drates_map'][:i + 1, :].copy()
+        # drates_alt = np.max(drates_alt, axis=0)
+        # # h_dist = get_horizontal_dist(locs_['self'], locs_['user'])
+        # mask = (drates_alt < self.drate_threshold)
+        # # mask &= (h_dist <= 1000)
+        # mask |= (mapping - self.n_mbss) == i
 
         locs_['user'] = locs_['user'][:, mask]
 
-        return gen_hist2d(locs_)
+        # return gen_hist2d(locs_)
+        return get_obs_flattened(locs_)
 
     def state(self):
         '''Return a global view of the environment.'''
         return gen_hist2d(self.locs)
 
-    def gen_mbs_loc(self):
+    def gen_mbs_loc(self) -> np.ndarray:
         assert self.n_mbss == 1, "Currently support one MBS only"
-        return np.array([self.bound, self.bound]).reshape(2, -1)
+        return np.array([self.bound - 1, self.bound - 1]).reshape(2, -1)
 
-    def gen_uav_init_locs(self):
+    def gen_uav_init_locs(
+        self,
+        user_locs: np.ndarray,      # shape=(2, n_users)
+        mbs_locs: np.ndarray,       # shape=(2, n_users)
+    ) -> np.ndarray:
         '''Generate initial locations of all drroneBSs. Output shape = (2, n_uavs).'''
+        # Version 1: random initial locations
         xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
         ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
-        return np.round(np.asarray([xlocs, ylocs]))
+        return np.array([xlocs, ylocs])
+
+        # Version 2: init UAVs at the cluster centroid
+        # if self.n_uavs <= -1:
+        #     uav_init_locs = np.array([
+        #         [-1, 1],        # top left
+        #         [-1, -1],       # bottom left
+        #         [1, -1],        # bottom right
+        #         [0, 0],         # center
+        #         [-1, 0],
+        #         [0, -1],
+        #         [0, 1]
+        #     ]).reshape(2, -1) * self.bound
+        #     init_locs = np.concatenate((mbs_locs, uav_init_locs[:, :self.n_uavs]), axis=1)
+        # else:
+        #     xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+        #     ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+        #     uav_init_locs = np.array([xlocs, ylocs])
+        #     init_locs = np.concatenate((mbs_locs, uav_init_locs), axis=1)
+
+        # cluster_centers, _, _ = kmeans_clustering(
+        #     user_locs=user_locs,
+        #     init_bs_locs=init_locs,
+        #     n_clusters=self.n_mbss + self.n_uavs
+        # )
+
+        # return cluster_centers[:, self.n_mbss:]
 
     def gen_user_init_locs(
         self,
@@ -323,7 +413,9 @@ class raw_env(AECEnv):
             ylocs = np.concatenate((ylocs, self.np_random.normal(y0, stddev, nusers)))
 
         locs = np.asarray([xlocs, ylocs])
-        locs = np.clip(locs, -self.bound, self.bound)
+        outliers = (locs[0] < -self.bound) | (locs[0] > self.bound)
+        outliers |= (locs[1] < -self.bound) | (locs[1] > self.bound)
+        locs = np.delete(locs, outliers, axis=1)
 
         return locs
 
@@ -407,13 +499,14 @@ class raw_env(AECEnv):
             h_dist_ = get_horizontal_dist(bs_locs[:, i], user_locs)
             if i < self.n_mbss:
                 snr_ = self.get_snr_macrobs_db(h_dist_)[0]
+                drates_map[i, :] = get_drate_bps(snr_, 'mbs')
             else:
                 snr_ = self.get_snr_uavbs_db(h_dist_)[0]
-            drates_map[i, :] = get_drate_bps(snr_)
+                drates_map[i, :] = get_drate_bps(snr_, 'uav')
 
         # V1.0 (User association): assign users to mBS/droneBS with the strongest signal
-        # drates = np.max(drates_map, axis=0)
-        # bs_mapping = np.argmax(drates_map, axis=0)
+        drates = np.max(drates_map, axis=0)
+        bs_mapping = np.argmax(drates_map, axis=0)
 
         # V1.1 (User association): only assign to droneBS if the mBS's signal is not stronog enough
         # drates_mbs = drates_map[:self.n_mbss, :]
@@ -428,12 +521,12 @@ class raw_env(AECEnv):
 
         # V1.2 (User association): only assign to a droneBS if the signal
         # from the mBS and all previous droneBSs is not stronog enough
-        drates = np.max(drates_map, axis=0)
-        bs_mapping = np.argmax(drates_map, axis=0)
-        for i in range(self.n_users):
-            if sum(drates_map[:, i] >= self.drate_threshold) > 1:
-                bs_mapping[i] = np.argmax(drates_map[:, i] >= self.drate_threshold)
-                drates[i] = drates_map[bs_mapping[i], i]
+        # drates = np.max(drates_map, axis=0)
+        # bs_mapping = np.argmax(drates_map, axis=0)
+        # for i in range(self.n_users):
+        #     if sum(drates_map[:, i] >= self.drate_threshold) > 1:
+        #         bs_mapping[i] = np.argmax(drates_map[:, i] >= self.drate_threshold)
+        #         drates[i] = drates_map[bs_mapping[i], i]
 
         # For tracking KPIs
         drate_avg = drates.mean()
@@ -462,12 +555,12 @@ class raw_env(AECEnv):
     def get_global_reward(self, new_kpis: Dict[str, np.ndarray]) -> float:
         old_kpis = self.infos['global']
 
-        # if new_kpis['n_satisfied'] > old_kpis['n_satisfied']:
-        #     n_satisfied_score = 1
-        # elif new_kpis['n_satisfied'] < old_kpis['n_satisfied']:
-        #     n_satisfied_score = -1
-        # else:
-        #     n_satisfied_score = 0
+        if new_kpis['n_satisfied'] > old_kpis['n_satisfied']:
+            n_satisfied_score = 1
+        elif new_kpis['n_satisfied'] < old_kpis['n_satisfied']:
+            n_satisfied_score = -1
+        else:
+            n_satisfied_score = 0
 
         # if new_kpis['drate_avg'] > old_kpis['drate_avg']:
         #     drate_score = 1
@@ -479,21 +572,21 @@ class raw_env(AECEnv):
         # return (1 - self.drate_rw_ratio) * n_satisfied_score\
         #     + self.drate_rw_ratio * drate_score
 
-        return new_kpis['n_satisfied'] - old_kpis['n_satisfied']
+        # return new_kpis['n_satisfied'] - old_kpis['n_satisfied']
 
-        # return n_satisfied_score
+        return n_satisfied_score
 
     def get_local_rewards(self, new_kpis: Dict[str, np.ndarray]) -> np.ndarray:
         old_kpis = self.infos['global']
 
-        # n_users_scores = np.zeros(self.n_uavs)
-        # for i in range(self.n_uavs):
-        #     if new_kpis['n_users_by_uavbs'][i] > old_kpis['n_users_by_uavbs'][i]:
-        #         n_users_scores[i] = 1
-        #     elif new_kpis['n_users_by_uavbs'][i] < old_kpis['n_users_by_uavbs'][i]:
-        #         n_users_scores[i] = -1
-        #     else:
-        #         n_users_scores[i] = 0
+        n_users_scores = np.zeros(self.n_uavs)
+        for i in range(self.n_uavs):
+            if new_kpis['n_users_by_uavbs'][i] > old_kpis['n_users_by_uavbs'][i]:
+                n_users_scores[i] = 1
+            elif new_kpis['n_users_by_uavbs'][i] < old_kpis['n_users_by_uavbs'][i]:
+                n_users_scores[i] = -1
+            else:
+                n_users_scores[i] = 0
 
         # drate_scores = np.zeros(self.n_uavs)
         #     if new_kpis['avg_drates_by_uavbs'][i] > old_kpis['avg_drates_by_uavbs'][i]:
@@ -506,9 +599,9 @@ class raw_env(AECEnv):
         # return (1 - self.drate_rw_ratio) * n_users_scores\
         #     + self.drate_rw_ratio * drate_scores
 
-        return new_kpis['n_users_by_uavbs'] - old_kpis['n_users_by_uavbs']
+        # return new_kpis['n_users_by_uavbs'] - old_kpis['n_users_by_uavbs']
 
-        # return n_users_scores
+        return n_users_scores
 
     def get_rewards(self, new_kpis: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         global_rewards = self.get_global_reward(new_kpis)
@@ -520,5 +613,5 @@ class raw_env(AECEnv):
 
     def check_locations_in_bound(self):
         for val in self.locs.values():
-            assert np.all(val <= self.bound)
-            assert np.all(val >= -self.bound)
+            assert np.all(val <= self.bound), "all locations must in range [-bound, bound]"
+            assert np.all(val >= -self.bound), "all locations must in range [-bound, bound]"
