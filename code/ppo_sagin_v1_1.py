@@ -16,6 +16,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from tqdm import tqdm
 import sys
+import os
+import datetime
 from envs.sagin_v1 import *
 from envs.utils import *
 
@@ -271,3 +273,28 @@ if __name__ == "__main__":
         tqdm.write(f"Clip Fraction: {np.mean(clip_fracs)}")
         tqdm.write(f"Explained Variance: {explained_var.item()}")
         tqdm.write("\n-------------------------------------------\n")
+
+    """ SAVE THE TRAINED MODEL """
+    PATH = "trained_agents/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.makedirs(PATH)
+
+    metadata = {
+        "name": "ppo_sagin_v1_1",
+        'episode': total_episodes,
+    }
+    with open(os.path.join(PATH, "metadata.txt"), 'w') as f:
+        for key, value in metadata.items():
+            f.write('%s: %s\n' % (key, value))
+
+    model = agent.network
+    torch.save({
+        'episode': total_episodes,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'log_ep_return': log_ep_return,
+        'log_value_loss': log_value_loss,
+        'log_policy_loss': log_policy_loss,
+        "metadata": metadata
+    }, PATH + "/model.tar")
+
+    print(f"Saved the trained agent to {PATH}")
