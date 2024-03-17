@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 # from supersuit import color_reduction_v0, frame_stack_v1, resize_v1
 from torch.distributions.categorical import Categorical
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import sys
 import os
@@ -88,6 +89,7 @@ if __name__ == "__main__":
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device('cuda')
     torch.set_default_dtype(torch.float64)
+    writer = SummaryWriter()
 
     """ALGO PARAMS"""
     ent_coef = 0.1
@@ -98,8 +100,8 @@ if __name__ == "__main__":
     # stack_size = 1
     # frame_size = (64, 64)
     max_cycles = 128
-    total_episodes = 1000
-    lrate = 0.5e-3
+    total_episodes = 10000
+    lrate = 1e-3
     n_reuse = 3             # no. of reuse times for the experiment of an episode
     seed = None
 
@@ -257,24 +259,41 @@ if __name__ == "__main__":
         log_value_loss[episode] = v_loss.item()
         log_policy_loss[episode] = pg_loss.item()
 
-        tqdm.write(f"Training episode {episode}")
-        tqdm.write(f"Episodic Return: {log_ep_return[episode]}")
-        rolling_wd = 50
-        if episode >= rolling_wd:
-            tqdm.write(
-                f"Movavg Return ({rolling_wd}): {np.mean(log_ep_return[episode-rolling_wd+1:episode+1])}"
-            )
-        tqdm.write(f"Episode Length: {end_step}")
-        tqdm.write("")
-        tqdm.write(f"Value Loss: {log_value_loss[episode]}")
-        tqdm.write(f"Policy Loss: {log_policy_loss[episode]}")
-        tqdm.write(f"Old Approx KL: {old_approx_kl.item()}")
-        tqdm.write(f"Approx KL: {approx_kl.item()}")
-        tqdm.write(f"Clip Fraction: {np.mean(clip_fracs)}")
-        tqdm.write(f"Explained Variance: {explained_var.item()}")
-        tqdm.write("\n-------------------------------------------\n")
+        # tqdm.write(f"Training episode {episode}")
+        # tqdm.write(f"Episodic Return: {log_ep_return[episode]}")
+        # rwd = 50
+        # if episode >= rwd:
+        #     mavg_return = np.mean(log_ep_return[episode - rwd + 1: episode + 1])
+        #     tqdm.write(
+        #         f"Ep. Return (MAVG) ({rwd}): {mavg_return}"
+        #     )
+        # tqdm.write(f"Episode Length: {end_step}")
+        # tqdm.write("")
+        # tqdm.write(f"Value Loss: {log_value_loss[episode]}")
+        # tqdm.write(f"Policy Loss: {log_policy_loss[episode]}")
+        # tqdm.write(f"Old Approx KL: {old_approx_kl.item()}")
+        # tqdm.write(f"Approx KL: {approx_kl.item()}")
+        # tqdm.write(f"Clip Fraction: {np.mean(clip_fracs)}")
+        # tqdm.write(f"Explained Variance: {explained_var.item()}")
+        # tqdm.write("\n-------------------------------------------\n")
+
+        writer.add_scalar("charts/episodic_return", log_ep_return[episode], episode)
+        writer.add_scalar(
+            "charts/learning_rate", optimizer.param_groups[0]["lr"], episode
+        )
+        writer.add_scalar("losses/value_loss", v_loss.item(), episode)
+        writer.add_scalar("losses/policy_loss", pg_loss.item(), episode)
+        writer.add_scalar("losses/entropy", entropy_loss.item(), episode)
+        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), episode)
+        writer.add_scalar("losses/approx_kl", approx_kl.item(), episode)
+        writer.add_scalar("losses/clipfrac", np.mean(clip_fracs), episode)
+        writer.add_scalar("losses/explained_variance", explained_var, episode)
+
+    writer.flush()
+    writer.close()
 
     """ SAVE THE TRAINED MODEL """
+    # Ref: https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-loading-a-general-checkpoint-for-inference-and-or-resuming-training
     PATH = "trained_agents/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     os.makedirs(PATH)
 
