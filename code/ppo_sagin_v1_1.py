@@ -100,13 +100,12 @@ if __name__ == "__main__":
     # stack_size = 1
     # frame_size = (64, 64)
     max_cycles = 128
-    total_episodes = 10000
+    total_episodes = 30000
     lrate = 1e-3
     n_reuse = 3             # no. of reuse times for the experiment of an episode
-    seed = None
 
     """ ENV SETUP """
-    env = parallel_env(seed=seed, max_cycles=max_cycles)
+    env = parallel_env(seed=None, max_cycles=max_cycles)
     # env = color_reduction_v0(env)
     # env = resize_v1(env, frame_size[0], frame_size[1])
     # env = frame_stack_v1(env, stack_size=stack_size)
@@ -305,10 +304,9 @@ if __name__ == "__main__":
         for key, value in metadata.items():
             f.write('%s: %s\n' % (key, value))
 
-    model = agent.network
     torch.save({
         'episode': total_episodes,
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': agent.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'log_ep_return': log_ep_return,
         'log_value_loss': log_value_loss,
