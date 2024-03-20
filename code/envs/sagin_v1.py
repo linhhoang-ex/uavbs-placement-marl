@@ -47,6 +47,7 @@ def kmeans_clustering(
     https://scikit-learn.org/stable/modules/generated/sklearn.cluster.KMeans.html
     '''
     kmeans = KMeans(n_clusters=n_clusters,
+                    n_init=1,
                     init=init_bs_locs.transpose(),
                     verbose=0
                     ).fit(user_locs.transpose())
@@ -104,11 +105,20 @@ class raw_env(AECEnv):
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
                  uav_velocity=25, continuous=False, render_mode=None,
                  hotspots=None, max_cycles=1800, drate_threshold=20e6,
-                 local_reward_ratio=0.2, drate_reward_ratio=0, seed=42):
+                 local_reward_ratio=0.2, drate_reward_ratio=0, seed=None,
+                 uav_init_mode='random', uav_init_locs=None):
+        '''
+        Params
+        ------
+        uav_init_mode: ['random', 'kmeans', 'specific']
+            If uav_init_mode == 'specific', uav_init_locs must be defined.
+        '''
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
         self.n_mbss = n_mbss    # Number of macro base stations
         self.uav_altitude = uav_altitude    # The UAV's flying altitude
+        self.uav_init_mode = uav_init_mode
+        self.uav_init_locs = uav_init_locs  # init positions of UAVs
         self.uav_velocity = uav_velocity    # The UAV's velocity (in m/s)
         self.hotspots = hotspots            # Infos about hotspot areas
         self.max_cycles = max_cycles  # Max no. of steps in an episode
@@ -227,12 +237,16 @@ class raw_env(AECEnv):
             'user': self.gen_user_init_locs(self.hotspots),
             'mbs': self.gen_mbs_loc()
         }
-        self.locs['uav'] = self.gen_uav_init_locs(
-            user_locs=self.locs['user'],
-            mbs_locs=self.locs['mbs']
-        )
+        if self.uav_init_mode == 'specific':
+            self.locs['uav'] = self.uav_init_locs.copy()
+        else:
+            self.locs['uav'] = self.gen_uav_init_locs(
+                mode=self.uav_init_mode,
+                user_locs=self.locs['user'],
+                mbs_locs=self.locs['mbs']
+            )
+            self.uav_init_locs = self.locs['uav'].copy()
         self.n_users = self.locs['user'].shape[-1]
-        self.uav_init_locs = self.locs['uav']
         self.check_locations_in_bound()
 
         # Initialization for step() method
@@ -365,40 +379,66 @@ class raw_env(AECEnv):
 
     def gen_uav_init_locs(
         self,
-        user_locs: np.ndarray,      # shape=(2, n_users)
-        mbs_locs: np.ndarray,       # shape=(2, n_users)
+        mode: str = 'random',
+        **kwargs
     ) -> np.ndarray:
-        '''Generate initial locations of all drroneBSs. Output shape = (2, n_uavs).'''
-        # Version 1: random initial locations
-        xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
-        ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
-        return np.array([xlocs, ylocs])
+        '''Generate initial locations for all drone BSs.
 
-        # Version 2: init UAVs at the cluster centroid
-        # if self.n_uavs <= -1:
-        #     uav_init_locs = np.array([
-        #         [-1, 1],        # top left
-        #         [-1, -1],       # bottom left
-        #         [1, -1],        # bottom right
-        #         [0, 0],         # center
-        #         [-1, 0],
-        #         [0, -1],
-        #         [0, 1]
-        #     ]).reshape(2, -1) * self.bound
-        #     init_locs = np.concatenate((mbs_locs, uav_init_locs[:, :self.n_uavs]), axis=1)
-        # else:
-        #     xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
-        #     ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
-        #     uav_init_locs = np.array([xlocs, ylocs])
-        #     init_locs = np.concatenate((mbs_locs, uav_init_locs), axis=1)
+            Params
+            ------
+            type: ['random', 'kmeans']
+                If type == 'random': UAVs are initially located randomly.
 
-        # cluster_centers, _, _ = kmeans_clustering(
-        #     user_locs=user_locs,
-        #     init_bs_locs=init_locs,
-        #     n_clusters=self.n_mbss + self.n_uavs
-        # )
+                If type == 'kmeans': UAVs are initially located at the cluster \
+                    centroids determined by K-means clustering.
+                    In support of clustering, two additional args are required:
+                        user_locs: np.ndarray,      # shape=(2, n_users)
+                        mbs_locs: np.ndarray,       # shape=(2, n_users)
 
-        # return cluster_centers[:, self.n_mbss:]
+            Returns
+            -------
+            shape = (2, n_uavs).
+        '''
+        if mode == 'random':
+            # Version 1: random initial locations
+            xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+            ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+
+            return np.array([xlocs, ylocs])
+
+        elif mode == 'kmeans':
+            # Version 2: init UAVs at the cluster centroid
+            user_locs = kwargs['user_locs']
+            mbs_locs = kwargs['mbs_locs']
+            if self.n_uavs <= 8:
+                uav_init_locs = np.array([
+                    [-1, 1],        # top left
+                    [-1, -1],       # bottom left
+                    [1, -1],        # bottom right
+                    [0, 0],         # center
+                    [-1, 0],
+                    [0, -1],
+                    [0, 1],
+                    [1, 0]
+                ]) * self.bound
+                uav_init_locs = uav_init_locs.transpose()
+                init_locs = np.concatenate((mbs_locs, uav_init_locs[:, :self.n_uavs]), axis=1)
+            else:
+                xlocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+                ylocs = self.np_random.uniform(-self.bound, self.bound, self.n_uavs)
+                uav_init_locs = np.array([xlocs, ylocs])
+                init_locs = np.concatenate((mbs_locs, uav_init_locs), axis=1)
+
+            cluster_centers, _, _ = kmeans_clustering(
+                user_locs=user_locs,
+                init_bs_locs=init_locs,
+                n_clusters=self.n_mbss + self.n_uavs
+            )
+
+            return cluster_centers[:, self.n_mbss:]
+
+        else:
+            raise KeyError("type shoule be in ['random', 'kmeans']")
 
     def gen_user_init_locs(
         self,
