@@ -35,12 +35,13 @@ def kmeans_clustering(
 
     Returns
     -------
-        cluster_centers_: ndarray of shape (2, n_clusters)
-            Coordinates of cluster centers
-        labels_: ndarray of shape (n_samples,)
-            Labels of each point
-        inertia_: float
-            Sum of squared distances of samples to their closest cluster center.
+        kmeans: an object of sklearn.cluster.KMeans class, with attributes:
+            cluster_centers_: ndarray of shape (2, n_clusters)
+                Coordinates of cluster centers
+            labels_: ndarray of shape (n_samples,)
+                Labels of each point
+            inertia_: float
+                Sum of squared distances of samples to their closest cluster center.
 
     References
     ---------
@@ -52,7 +53,8 @@ def kmeans_clustering(
                     verbose=0
                     ).fit(user_locs.transpose())
 
-    return kmeans.cluster_centers_.transpose(), kmeans.labels_, kmeans.inertia_
+    # return kmeans.cluster_centers_.transpose(), kmeans.labels_, kmeans.inertia_
+    return kmeans
 
 
 def get_drate_bps(
@@ -105,13 +107,24 @@ class raw_env(AECEnv):
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
                  uav_velocity=25, continuous=False, render_mode=None,
                  hotspots=None, max_cycles=1800, drate_threshold=20e6,
-                 local_reward_ratio=0.2, drate_reward_ratio=0, seed=None,
-                 uav_init_mode='random', uav_init_locs=None):
+                 local_reward_ratio=0.2, drate_reward_ratio=0.2, seed=None,
+                 uav_init_mode='random', uav_init_locs=None,
+                 link_assignment='greedy (drate)',
+                 user_mode='stationary', user_velocity=0):
         '''
         Params
         ------
         uav_init_mode: ['random', 'kmeans', 'specific']
             If uav_init_mode == 'specific', uav_init_locs must be defined.
+
+        link_assignment: ["greedy (drate)", "kmeans"]
+            "greedy (drate)": assign users to the BS with the strongest signal
+            "kmeans": using k-means clustering to assign users to BSs
+
+        user_mode (str, optional): the mobility model of users, in ["stationary", "random walk"]
+            If user_mode is not "stationary", user_velocity (>0) must be defined.
+            "stationary": no movements
+            "random walk": random walk model with 9 degrees of freedom \n
         '''
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
@@ -121,7 +134,10 @@ class raw_env(AECEnv):
         self.uav_init_locs = uav_init_locs  # init positions of UAVs
         self.uav_velocity = uav_velocity    # The UAV's velocity (in m/s)
         self.hotspots = hotspots            # Infos about hotspot areas
-        self.max_cycles = max_cycles  # Max no. of steps in an episode
+        self.max_cycles = max_cycles        # Max no. of steps in an episode
+        self.link_assignment = link_assignment
+        self.user_mode = user_mode
+        self.user_velocity = user_velocity
 
         self.agents = ["uav_" + str(r) for r in range(self.n_uavs)]
         self.possible_agents = self.agents[:]
@@ -262,7 +278,10 @@ class raw_env(AECEnv):
         self.terminations = dict(zip(self.agents, [False for _ in self.agents]))
         self.truncations = dict(zip(self.agents, [False for _ in self.agents]))
         self.infos = dict(zip(self.agents, [{} for _ in self.agents]))
-        kpis = self.get_drates_and_link_assignment_greedy()
+        if self.link_assignment == "greedy (drate)":
+            kpis = self.get_drates_and_link_assignment_greedy()
+        elif self.link_assignment == "kmeans":
+            kpis = self.get_drates_and_link_assignment_kmeans()
         self.infos['global'] = kpis
 
         # No. of steps elapsed in the episode, for truncation condition
@@ -287,7 +306,10 @@ class raw_env(AECEnv):
         # Update rewards, terminations, and truncations if the current agent is the last
         if self._agent_selector.is_last():
             self.check_locations_in_bound()
-            new_kpis = self.get_drates_and_link_assignment_greedy()
+            if self.link_assignment == "greedy (drate)":
+                new_kpis = self.get_drates_and_link_assignment_greedy()
+            elif self.link_assignment == "kmeans":
+                new_kpis = self.get_drates_and_link_assignment_kmeans()
 
             # Calculate rewards for each agent
             self.rewards = self.get_rewards(new_kpis)
@@ -296,14 +318,17 @@ class raw_env(AECEnv):
             # self.infos = dict(zip(self.agents, [{} for _ in self.agents]))
             self.infos['global'] = new_kpis
 
+            # Update locations of users
+            self.move_users()
+
             # Check truncation conditions (overwrites termination conditions)
-            self.truncate = self.n_steps >= self.max_cycles
+            self.n_steps += 1
+            self.truncate = self.n_steps >= self.max_cycles - 1
             self.truncations = {agent: self.truncate for agent in self.agents}
 
             # Check termination conditions
             self.terminations = {agent: self.terminate for agent in self.agents}
 
-            self.n_steps += 1
         else:
             self._clear_rewards()
 
@@ -418,7 +443,6 @@ class raw_env(AECEnv):
                     [0, 0],         # center
                     [-1, 0],
                     [0, -1],
-                    [0, 1],
                     [1, 0]
                 ]) * self.bound
                 uav_init_locs = uav_init_locs.transpose()
@@ -429,11 +453,12 @@ class raw_env(AECEnv):
                 uav_init_locs = np.array([xlocs, ylocs])
                 init_locs = np.concatenate((mbs_locs, uav_init_locs), axis=1)
 
-            cluster_centers, _, _ = kmeans_clustering(
+            kmeans = kmeans_clustering(
                 user_locs=user_locs,
                 init_bs_locs=init_locs,
                 n_clusters=self.n_mbss + self.n_uavs
             )
+            cluster_centers = kmeans.cluster_centers_.transpose()
 
             return cluster_centers[:, self.n_mbss:]
 
@@ -466,6 +491,22 @@ class raw_env(AECEnv):
         next_loc = self.locs['uav'][:, agent_id] + direction * self.uav_velocity    # shape=(2,)
         next_loc = np.clip(next_loc, -self.bound, self.bound).flatten()
         self.locs['uav'][:, agent_id] = next_loc
+
+    def move_users(self):
+        """Update the locations of all users in self.locs['user']."""
+        if self.user_mode == "stationary":
+            pass
+
+        if self.user_mode != "stationary":
+            assert self.user_velocity > 0, \
+                "if users are not stationary, user_velocity must be greater than 0"
+
+        if self.user_mode == "random walk":
+            curr_locs = self.locs['user'].copy()
+            directions = self.np_random.choice([-1, 0, 1], size=(2, self.n_users))
+            new_locs = curr_locs + self.user_velocity * directions
+            new_locs = np.clip(new_locs, -self.bound, self.bound)
+            self.locs['user'] = new_locs
 
     def get_snr_macrobs_db(
         self,
@@ -519,6 +560,36 @@ class raw_env(AECEnv):
 
         return (snr_db, p_loss_db, snr_mean_db)
 
+    def get_drates_map(self, user_locs, bs_locs):
+        """ Get the data rate on each link between a user and a base station.
+
+        Returns:
+            drates_map: shape=(n_bss, n_users)"""
+        drates_map = np.zeros(shape=(self.n_mbss + self.n_uavs, self.n_users))
+        for i in range(self.n_mbss + self.n_uavs):
+            h_dist_ = get_horizontal_dist(bs_locs[:, i], user_locs)
+            if i < self.n_mbss:
+                snr_ = self.get_snr_macrobs_db(h_dist_)[0]
+                drates_map[i, :] = get_drate_bps(snr_, 'mbs')
+            else:
+                snr_ = self.get_snr_uavbs_db(h_dist_)[0]
+                drates_map[i, :] = get_drate_bps(snr_, 'uav')
+
+        return drates_map
+
+    def get_stats_on_uavbs(self, drates, bs_mapping):
+        avg_drates_by_uavbs = []
+        n_users_by_uavbs = []
+        for i in range(self.n_uavs):
+            rs = drates[bs_mapping == i + self.n_mbss]
+            n_users_by_uavbs.append(rs.size)
+            if rs.size == 0:        # no users are assigned to this drone BS
+                avg_drates_by_uavbs.append(0)
+            else:
+                avg_drates_by_uavbs.append(rs.mean())
+
+        return np.array(avg_drates_by_uavbs), np.array(n_users_by_uavbs)
+
     def get_drates_and_link_assignment_greedy(self):
         '''Associate users to macro and drone BSs: greedily based on downlink rates.
         The BS that offers the highest data rate is assigned to each user.
@@ -534,15 +605,7 @@ class raw_env(AECEnv):
         bs_locs = np.concatenate((self.locs['mbs'], self.locs['uav']), axis=-1)
 
         # Calculate the data rate on each links for all users
-        drates_map = np.zeros(shape=(self.n_mbss + self.n_uavs, self.n_users))
-        for i in range(self.n_mbss + self.n_uavs):
-            h_dist_ = get_horizontal_dist(bs_locs[:, i], user_locs)
-            if i < self.n_mbss:
-                snr_ = self.get_snr_macrobs_db(h_dist_)[0]
-                drates_map[i, :] = get_drate_bps(snr_, 'mbs')
-            else:
-                snr_ = self.get_snr_uavbs_db(h_dist_)[0]
-                drates_map[i, :] = get_drate_bps(snr_, 'uav')
+        drates_map = self.get_drates_map(user_locs, bs_locs)
 
         # V1.0 (User association): assign users to mBS/droneBS with the strongest signal
         drates = np.max(drates_map, axis=0)
@@ -571,23 +634,50 @@ class raw_env(AECEnv):
         # For tracking KPIs
         drate_avg = drates.mean()
         n_satisfied = np.sum(drates >= self.drate_threshold)
-        avg_drates_by_uavbs = []
-        n_users_by_uavbs = []
-        for i in range(self.n_uavs):
-            rs = drates[bs_mapping == i + self.n_mbss]
-            n_users_by_uavbs.append(rs.size)
-            if rs.size == 0:        # no users are assigned to this drone BS
-                avg_drates_by_uavbs.append(0)
-            else:
-                avg_drates_by_uavbs.append(rs.mean())
+        avg_drates_by_uavbs, n_users_by_uavbs = self.get_stats_on_uavbs(
+            drates=drates, bs_mapping=bs_mapping
+        )
         kpis = {
-            'drates': drates,
-            'drates_map': drates_map,
-            'bs_mapping': bs_mapping,
+            'drates': drates,           # shape=(n_users,)
+            'drates_map': drates_map,   # shape=(n_bss, n_users)
+            'bs_mapping': bs_mapping,   # shape=(n_users,)
             'drate_avg': drate_avg,
             'n_satisfied': n_satisfied,
-            'avg_drates_by_uavbs': np.asarray(avg_drates_by_uavbs),
-            'n_users_by_uavbs': np.asarray(n_users_by_uavbs)
+            'avg_drates_by_uavbs': avg_drates_by_uavbs,
+            'n_users_by_uavbs': n_users_by_uavbs
+        }
+
+        return kpis
+
+    def get_drates_and_link_assignment_kmeans(self):
+        """Assign users to base stations using K-means clustering."""
+        user_locs = self.locs['user']
+        uav_locs = self.locs['uav']
+        mbs_locs = self.locs['mbs']
+        bs_locs = np.concatenate((mbs_locs, uav_locs), axis=1)
+
+        kmeans = kmeans_clustering(
+            user_locs=user_locs,
+            init_bs_locs=bs_locs,
+            n_clusters=self.n_uavs + self.n_mbss
+        )
+
+        bs_mapping = kmeans.labels_
+        drates_map = self.get_drates_map(user_locs, bs_locs)
+        drates = np.array([drates_map[bs_mapping[i], i] for i in range(self.n_users)])
+        drate_avg = drates.mean()
+        n_satisfied = np.sum(drates >= self.drate_threshold)
+        avg_drates_by_uavbs, n_users_by_uavbs = self.get_stats_on_uavbs(
+            drates=drates, bs_mapping=bs_mapping
+        )
+        kpis = {
+            'drates': drates,           # shape=(n_users,)
+            'drates_map': drates_map,   # shape=(n_bss, n_users)
+            'bs_mapping': bs_mapping,   # shape=(n_users,)
+            'drate_avg': drate_avg,
+            'n_satisfied': n_satisfied,
+            'avg_drates_by_uavbs': avg_drates_by_uavbs,
+            'n_users_by_uavbs': n_users_by_uavbs
         }
 
         return kpis
@@ -628,20 +718,18 @@ class raw_env(AECEnv):
             else:
                 n_users_scores[i] = 0
 
-        # drate_scores = np.zeros(self.n_uavs)
-        #     if new_kpis['avg_drates_by_uavbs'][i] > old_kpis['avg_drates_by_uavbs'][i]:
-        #         drate_scores[i] = 1
-        #     elif new_kpis['avg_drates_by_uavbs'][i] < old_kpis['avg_drates_by_uavbs'][i]:
-        #         drate_scores[i] = -1
-        #     else:
-        #         drate_scores[i] = 0
+        drate_scores = np.zeros(self.n_uavs)
+        if new_kpis['avg_drates_by_uavbs'][i] > old_kpis['avg_drates_by_uavbs'][i]:
+            drate_scores[i] = 1
+        elif new_kpis['avg_drates_by_uavbs'][i] < old_kpis['avg_drates_by_uavbs'][i]:
+            drate_scores[i] = -1
+        else:
+            drate_scores[i] = 0
 
-        # return (1 - self.drate_rw_ratio) * n_users_scores\
-        #     + self.drate_rw_ratio * drate_scores
+        return (1 - self.drate_rw_ratio) * n_users_scores\
+            + self.drate_rw_ratio * drate_scores
 
-        # return new_kpis['n_users_by_uavbs'] - old_kpis['n_users_by_uavbs']
-
-        return n_users_scores
+        # return n_users_scores
 
     def get_rewards(self, new_kpis: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         global_rewards = self.get_global_reward(new_kpis)
