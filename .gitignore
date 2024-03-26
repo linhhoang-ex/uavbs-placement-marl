@@ -163,8 +163,9 @@ cython_debug/
 *test.*
 
 # Auto-generated (PettingZoo) and temporary files
-code/runs
-!code/runs/selected
-code/tmp
+code/runs/*
+# temporary: !code/runs/selected
+code/tmp/*
+code/cmp/*
 code/trained_agents/*
-!code/trained_agents/selected
+# temporary: !code/trained_agents/selected
