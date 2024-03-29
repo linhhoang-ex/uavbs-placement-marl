@@ -57,6 +57,68 @@ def kmeans_clustering(
     return kmeans
 
 
+def get_snr_macrobs_db(
+    rng,                        # an instant of np.random.default_rng()
+    h_dist: np.ndarray,         # horizontal distance (m) to the mBS, shape=(n_users,)
+    logF_db: np.float_ = 2,     # std var for the log-normally distributed shadowing
+    noise_db: np.float_ = -90,  # total noise power in dBm
+    pTx_dBm: np.float_ = 46,    # transmit power in dBm of the macro BS
+    fading: bool = True,        # whether or not consider fading effects
+    n_samples: np.float_ = 250  # no. of samples/s for SNR w/ coherent time ~40ms @fc=2GHz, v=15m/s
+) -> Tuple[Any]:     # snr [dB] for each user, shape=(n_users)
+    '''Calculate the path loss [dB] and SNR [dB] for each user via the macro BS's link.
+
+    References:
+    - https://www.arib.or.jp/english/html/overview/doc/STD-T63v9_20/5_Appendix/Rel5/25/25942-530.pdf
+    - https://en.wikipedia.org/wiki/Coherence_time_(communications_systems) (coherent time)
+    '''
+    h_dist = np.maximum(h_dist, 1)          # at leat 1 m (the reference dist), avoid log(0)
+    p_loss_mean_db = 128.1 + 37.6 * np.log10(h_dist / 1e3)
+    if fading is True:
+        fading_db = rng.normal(
+            loc=0, scale=logF_db, size=(len(h_dist), n_samples)
+        ).mean(axis=-1)                 # considering coherent time
+        p_loss_db = p_loss_mean_db + fading_db
+    else:
+        p_loss_db = p_loss_mean_db
+    snr_mean_db = pTx_dBm - p_loss_mean_db - noise_db
+    snr_db = pTx_dBm - p_loss_db - noise_db
+    return (snr_db, p_loss_db, snr_mean_db)
+
+
+def get_snr_uavbs_db(
+    rng,                            # an instant of np.random.default_rng()
+    h_dist_m: np.ndarray,           # horizontal distance to the drone BS, shape=(n_users,)
+    flying_alt: np.float_ = 120,    # flying altitude of the drone BS
+    ref_pw_db: np.float_ = -47,     # reference signal power [dB] at d0=1m and fc=5.8GHz
+    noise_db: np.float_ = -90,      # total noise power in dBm
+    pTx_dBm: np.float_ = 30,        # transmit power in dBm of the drone BS
+    kappa: np.float_ = 50,          # coefficient for the Rician channel effect
+    p_loss_coeff: np.float_ = 2.7,  # path loss's coefficient
+    fading: bool = True,            # whether or not to consider fading effects
+    n_samples: np.float_ = 667      # no. of samples/s for SNR w/ coherent time ~15ms @fc=5.8GHz, v=15m/s
+) -> Tuple[Any]:
+    '''Calculate the path loss [dB] and SNR [dB] for each user via the drone BS's link.
+
+    References:
+    - https://doi.org/10.1109/TWC.2019.2926279 (for the comm. model)
+    - https://doi.org/10.1109/LWC.2017.2710045 (path loss coefficients)
+    - https://en.wikipedia.org/wiki/Coherence_time_(communications_systems) (coherent time)
+    '''
+    dist_m = np.sqrt(h_dist_m**2 + flying_alt**2)
+    p_loss_db = 10 * p_loss_coeff * np.log10(dist_m)
+    if fading is True:
+        psi_rician = np.sqrt(kappa / (1 + kappa)) \
+            + np.sqrt(1 / (1 + kappa)) * rng.normal(size=(len(h_dist_m), n_samples))
+        psi_rician = np.mean(psi_rician, axis=-1)   # considering coherent time
+    else:
+        psi_rician = np.sqrt(kappa / (1 + kappa))
+    snr_db = pTx_dBm + ref_pw_db + to_dB(psi_rician**2) - p_loss_db - noise_db
+    snr_mean_db = pTx_dBm + ref_pw_db - p_loss_db - noise_db
+
+    return (snr_db, p_loss_db, snr_mean_db)
+
+
 def get_drate_bps(
     snr_db: np.ndarray,             # SNR [dB] of all users, shape=(n_users,)
     type: str,                      # in ['uav', 'mbs']
@@ -106,7 +168,7 @@ class raw_env(AECEnv):
 
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
                  uav_velocity=25, continuous=False, render_mode=None,
-                 hotspots=None, max_cycles=1800, drate_threshold=20e6,
+                 hotspots=None, max_cycles=512, drate_threshold=20e6,
                  local_reward_ratio=0.2, drate_reward_ratio=0.2, seed=None,
                  uav_init_mode='random', uav_init_locs=None,
                  link_assignment='greedy (drate)',
@@ -139,14 +201,14 @@ class raw_env(AECEnv):
         self.user_mode = user_mode
         self.user_velocity = user_velocity
 
+        self.local_rw_ratio = local_reward_ratio
+        self.drate_rw_ratio = drate_reward_ratio
+        self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
+
         self.agents = ["uav_" + str(r) for r in range(self.n_uavs)]
         self.possible_agents = self.agents[:]
         self.agent_name_mapping = dict(zip(self.agents, list(range(self.n_uavs))))
         self._agent_selector = agent_selector(self.agents)
-
-        self.local_rw_ratio = local_reward_ratio
-        self.drate_rw_ratio = drate_reward_ratio
-        self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
 
         self.obs_shape = get_obs_flattened(
             locs={},
@@ -508,58 +570,6 @@ class raw_env(AECEnv):
             new_locs = np.clip(new_locs, -self.bound, self.bound)
             self.locs['user'] = new_locs
 
-    def get_snr_macrobs_db(
-        self,
-        h_dist: np.ndarray,         # horizontal distance (m) to the mBS, shape=(n_users,)
-        logF_db: np.float_ = 2,     # std var for the log-normally distributed shadowing
-        noise_db: np.float_ = -90,  # total noise power in dBm
-        pTx_dBm: np.float_ = 46,    # transmit power in dBm of the macro BS
-        n_samples: np.float_ = 250  # no. of samples/s for SNR w/ coherent time ~40ms @fc=2GHz, v=15m/s
-    ) -> Tuple[Any]:     # snr [dB] for each user, shape=(n_users)
-        '''Calculate the path loss [dB] and SNR [dB] for each user via the macro BS's link.
-
-        References:
-        - https://www.arib.or.jp/english/html/overview/doc/STD-T63v9_20/5_Appendix/Rel5/25/25942-530.pdf
-        - https://en.wikipedia.org/wiki/Coherence_time_(communications_systems) (coherent time)
-        '''
-        h_dist = np.maximum(h_dist, 1)          # at leat 1 m (the reference dist), avoid log(0)
-        p_loss_mean_db = 128.1 + 37.6 * np.log10(h_dist / 1e3)
-        fading_db = self.np_random.normal(
-            loc=0, scale=logF_db, size=(len(h_dist), n_samples)
-        ).mean(axis=-1)                 # considering coherent time
-        p_loss_db = p_loss_mean_db + fading_db
-        snr_mean_db = pTx_dBm - p_loss_mean_db - noise_db
-        snr_db = pTx_dBm - p_loss_db - noise_db
-        return (snr_db, p_loss_db, snr_mean_db)
-
-    def get_snr_uavbs_db(
-        self,
-        h_dist_m: np.ndarray,           # horizontal distance to the drone BS, shape=(n_users,)
-        flying_alt: np.float_ = 120,    # flying altitude of the drone BS
-        ref_pw_db: np.float_ = -47,     # reference signal power [dB] at d0=1m and fc=5.8GHz
-        noise_db: np.float_ = -90,      # total noise power in dBm
-        pTx_dBm: np.float_ = 30,        # transmit power in dBm of the drone BS
-        kappa: np.float_ = 50,          # coefficient for the Rician channel effect
-        p_loss_coeff: np.float_ = 2.7,  # path loss's coefficient
-        n_samples: np.float_ = 667      # no. of samples/s for SNR w/ coherent time ~15ms @fc=5.8GHz, v=15m/s
-    ) -> Tuple[Any]:
-        '''Calculate the path loss [dB] and SNR [dB] for each user via the drone BS's link.
-
-        References:
-        - https://doi.org/10.1109/TWC.2019.2926279 (for the comm. model)
-        - https://doi.org/10.1109/LWC.2017.2710045 (path loss coefficients)
-        - https://en.wikipedia.org/wiki/Coherence_time_(communications_systems) (coherent time)
-        '''
-        dist_m = np.sqrt(h_dist_m**2 + flying_alt**2)
-        p_loss_db = 10 * p_loss_coeff * np.log10(dist_m)
-        psi_rician = np.sqrt(kappa / (1 + kappa)) \
-            + np.sqrt(1 / (1 + kappa)) * self.np_random.normal(size=(len(h_dist_m), n_samples))
-        psi_rician = np.mean(psi_rician, axis=-1)   # considering coherent time
-        snr_db = pTx_dBm + ref_pw_db + to_dB(psi_rician**2) - p_loss_db - noise_db
-        snr_mean_db = pTx_dBm + ref_pw_db - p_loss_db - noise_db
-
-        return (snr_db, p_loss_db, snr_mean_db)
-
     def get_drates_map(self, user_locs, bs_locs):
         """ Get the data rate on each link between a user and a base station.
 
@@ -569,10 +579,10 @@ class raw_env(AECEnv):
         for i in range(self.n_mbss + self.n_uavs):
             h_dist_ = get_horizontal_dist(bs_locs[:, i], user_locs)
             if i < self.n_mbss:
-                snr_ = self.get_snr_macrobs_db(h_dist_)[0]
+                snr_ = get_snr_macrobs_db(self.np_random, h_dist_)[0]
                 drates_map[i, :] = get_drate_bps(snr_, 'mbs')
             else:
-                snr_ = self.get_snr_uavbs_db(h_dist_)[0]
+                snr_ = get_snr_uavbs_db(self.np_random, h_dist_)[0]
                 drates_map[i, :] = get_drate_bps(snr_, 'uav')
 
         return drates_map
@@ -743,3 +753,187 @@ class raw_env(AECEnv):
         for val in self.locs.values():
             assert np.all(val <= self.bound), "all locations must in range [-bound, bound]"
             assert np.all(val >= -self.bound), "all locations must in range [-bound, bound]"
+
+
+class SingleDroneEnv(gymnasium.Env):
+    def __init__(
+        self, bound=1000, n_uavs=1, n_mbss=1, uav_altitude=120,
+        uav_velocity=25, render_mode=None,
+        hotspots=None, max_cycles=512, drate_threshold=20e6,
+        drate_reward_ratio=1, step_penalty=0.05, seed=None,
+        uav_init_mode='random', uav_init_locs=None,
+        d_terminate=15
+    ):
+        """
+        Params
+        ------
+        uav_init_mode: ['random', 'specific']
+            If uav_init_mode == 'specific', uav_init_locs must be defined.
+        """
+        self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
+        self.n_uavs = n_uavs    # Number of drone base stations
+        self.n_mbss = n_mbss    # Number of macro base stations
+        self.uav_altitude = uav_altitude    # The UAV's flying altitude
+        self.uav_init_mode = uav_init_mode
+        self.uav_init_locs = uav_init_locs  # init positions of UAVs
+        self.uav_velocity = uav_velocity    # The UAV's velocity (in m/s)
+        self.hotspots = hotspots            # Infos about hotspot areas
+        self.max_cycles = max_cycles        # Max no. of steps in an episode
+
+        self.drate_rw_ratio = drate_reward_ratio
+        self.step_penalty = step_penalty
+        self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
+        self.d_terminate = d_terminate  # Terminate condition, distance(drone, hotspot)
+
+        self.obs_shape = get_obs_flattened(
+            locs={},
+            n_uavs=self.n_uavs,
+            n_mbss=self.n_mbss,
+            mode="sarl"
+        ).shape         # observation shape of one agent
+        self.render_mode = render_mode
+
+        assert self.n_uavs == 1, "n_uavs must be one (single-agent scenario)"
+
+        self.observation_space = gymnasium.spaces.Box(
+            low=0,
+            high=1,
+            shape=self.obs_shape,
+            dtype=np.float64,
+        )
+
+        # 5 actions: move to the east (right), north (up), west (left),
+        # south (down), and remain stationary (i.e., no movement)
+        self.action_space = gymnasium.spaces.Discrete(5)
+        self._action_to_direction = {
+            0: np.array([1, 0]),        # east
+            1: np.array([0, 1]),        # north
+            2: np.array([-1, 0]),       # west
+            3: np.array([0, -1]),       # south
+            4: np.array([0, 0]),        # no movement
+        }
+
+        self.terminate = False
+        self.truncate = False
+
+        self._seed(seed)
+
+    def _seed(self, seed=None):
+        # self.np_random is an instance of np.random.default_rng().
+        self.np_random, seed = seeding.np_random(seed)
+
+    def reset(self, seed=None):
+        if seed is not None:
+            super().reset(seed=seed)
+
+        self.locs = {'user': self.gen_user_init_locs()}
+        if self.uav_init_mode == "random":
+            self.locs['self'] = self.gen_uav_init_loc()
+            self.uav_init_loc = self.locs['self'].copy()
+        elif self.uav_init_mode == "specific":
+            self.locs['self'] = self.uav_init_locs.copy()
+        self.locs['mbs'] = np.array([self.bound, self.bound]).reshape(2, -1)
+        self.hotspot_loc = np.array([
+            np.mean(self.locs['user'][0]),
+            np.mean(self.locs['user'][1])
+        ]).reshape(2, -1)
+        self.n_users = self.locs['user'].shape[-1]
+        self.check_locations_in_bound()
+
+        observation = get_obs_flattened(
+            locs=self.locs,
+            mode="sarl"
+        )
+        kpis = self.get_kpis()
+        self.info = {'kpis': kpis}
+
+        # No. of steps elapsed in the episode, for truncation condition
+        self.n_steps = 0
+
+        return observation, self.info
+
+    def step(self, action):
+        self.n_steps += 1
+        self.move_uav(
+            action=action,
+            # clipping=False
+        )
+        new_kpis = self.get_kpis()
+        reward = self.get_reward(new_kpis)
+        self.info['kpis'] = new_kpis
+        observation = get_obs_flattened(
+            locs=self.locs,
+            mode="sarl"
+        )
+        terminated = np.all(
+            np.isclose(self.locs['self'], self.hotspot_loc, atol=self.d_terminate)
+        ).item()
+        terminated |= self.n_steps >= (self.max_cycles - 1)
+
+        return observation, reward, terminated, False, self.info
+
+    def state(self):
+        '''Return a global view of the environment.'''
+        return gen_hist2d(self.locs, mode="sarl")
+
+    def gen_user_init_locs(self):
+        rng = self.np_random
+        stddev = 300
+        n_users = 100
+        hotspot_loc = rng.uniform(-self.bound + stddev, self.bound - stddev, size=2)
+        xlocs = rng.normal(hotspot_loc[0], stddev, n_users)
+        ylocs = rng.normal(hotspot_loc[1], stddev, n_users)
+
+        locs = np.asarray([xlocs, ylocs])
+        outliers = (locs[0] < -self.bound) | (locs[0] > self.bound)
+        outliers |= (locs[1] < -self.bound) | (locs[1] > self.bound)
+        locs = np.delete(locs, outliers, axis=1)
+
+        return locs
+
+    def gen_uav_init_loc(self):
+        return self.np_random.uniform(-self.bound, self.bound, size=(2, 1))
+
+    def check_locations_in_bound(self):
+        for val in self.locs.values():
+            assert np.all(val <= self.bound), "all locations must in range [-bound, bound]"
+            assert np.all(val >= -self.bound), "all locations must in range [-bound, bound]"
+
+    def move_uav(self, action: np.ndarray, clipping=True):
+        '''Update the location of the corresponding uav given an action'''
+        direction = self._action_to_direction[action]       # shape=(2,)
+        next_loc = self.locs['self'].flatten() + direction * self.uav_velocity  # shape=(2,)
+        if clipping is True:
+            next_loc = np.clip(next_loc, -self.bound, self.bound)
+        self.locs['self'] = next_loc.reshape(2, -1)
+
+    def get_kpis(self):
+        hdist_ = get_horizontal_dist(self.locs['self'], self.locs['user'])
+        snr_ = get_snr_uavbs_db(self.np_random, hdist_, fading=False)[0]
+        drates = get_drate_bps(snr_, 'uav')
+        kpis = {
+            'drates': drates,
+            'drate_avg': drates.mean(),
+            'n_satisfied': np.sum(drates >= self.drate_threshold)
+        }
+
+        return kpis
+
+    def get_reward(self, new_kpis):
+        old_kpis = self.info['kpis']
+        if new_kpis['n_satisfied'] > old_kpis['n_satisfied']:
+            n_satisfied_score = 1
+        elif new_kpis['n_satisfied'] < old_kpis['n_satisfied']:
+            n_satisfied_score = -1
+        else:
+            n_satisfied_score = -0.05
+
+        if new_kpis['drate_avg'] > old_kpis['drate_avg']:
+            drate_score = 1
+        elif new_kpis['drate_avg'] < old_kpis['drate_avg']:
+            drate_score = -1
+        else:
+            drate_score = -0.1
+
+        return (1 - self.drate_rw_ratio) * n_satisfied_score\
+            + self.drate_rw_ratio * drate_score - self.step_penalty
