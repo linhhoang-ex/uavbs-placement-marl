@@ -10,7 +10,7 @@ rng = np.random.default_rng()
 
 def save_img_from_rgba_arr(
     rgba_arr: np.ndarray, fpath: str = 'tmp/tmp.png',
-    figsize: Tuple = (4, 4), dpi: int = 64, transparent=True
+    figsize: Tuple = (4, 4), dpi: int = 64, transparent=True, show=False
 ) -> None:
     '''Save RGBA array (n_rows, n_cols, 4) to an image without padding.
     Output image size = figsize * dpi - 10% of matplotlib's default padding'''
@@ -19,6 +19,8 @@ def save_img_from_rgba_arr(
     plt.axis("off")
     plt.tight_layout()
     plt.savefig(fpath, bbox_inches='tight', pad_inches=0, dpi=dpi, transparent=transparent)
+    if show is True:
+        plt.show()
     plt.close()
     print(f"Image saved to {os.path.join(os.getcwd(), fpath)}")
 
@@ -51,6 +53,7 @@ for cmap in cmaps.values():
 
 def gen_hist2d(
     locs: Dict[str, np.ndarray],    # locations of users, macro BSs, and drone BSs
+    mode: str = "marl",             # ["sarl", "marl"]
     cmaps: Dict[str, str] = cmaps,  # color map to plot the histogram
     bound: float = 1000,            # boundary of the area, default = 1.5 km
     grid_size: float = 50,               # grid size of the heatmap, default = 20 m
@@ -60,13 +63,23 @@ def gen_hist2d(
 ) -> np.ndarray:                    # the heatmap of all network entities
     '''(v1.3) Convert locations of all netowrk entities (users, macro and drone BSs)
     into a 2D histogram map, viewed as an RGBA array of shape (H, W, 4).
-    - locs = dict{'user': np.ndarray of shape (2, n_users),
-                'mbs': np.ndarray of shape (2, n_mbss),
-                'uav': np.ndarray of shape (2, n_uavs),
-                'self': np.ndarray of shape (2, n_uavs)}
-    - output heatmap: width = height = figsize * dpi - 10% of matplotlib's default padding
 
-    References:
+    Params
+    ------
+    locs = {'user': np.ndarray of shape (2, n_users),
+            'mbs': np.ndarray of shape (2, n_mbss),    # required if mode="marl"
+            'uav': np.ndarray of shape (2, n_uavs),    # required if mode="marl"
+            'self': np.ndarray of shape (2, n_uavs)}
+    mode: ["marl", "sarl"]
+        "marl": multi-agent mode
+        "sarl": single-agent mode
+
+    Returns
+    -------
+    output heatmap: width = height = figsize * dpi - 10% of matplotlib's default padding
+
+    References
+    ----------
     - https://stackoverflow.com/a/21940031/16467215
     - https://stackoverflow.com/a/67823421/16467215
     '''
@@ -77,7 +90,10 @@ def gen_hist2d(
     fig = plt.figure(figsize=figsize, dpi=dpi, num=1, clear=True)
     ax = plt.gca()
     if locs != {}:
-        plt_order = ['user', 'mbs', 'uav', 'self']
+        if mode == "marl":
+            plt_order = ['user', 'mbs', 'uav', 'self']
+        elif mode == "sarl":
+            plt_order = ['user', 'self']
         # for type, coordinates in locs.items():
         for type in plt_order:
             coordinates = locs[type]
@@ -101,7 +117,7 @@ def gen_hist2d(
     # plt.cla()
     # plt.clf()
     # fig.clear()
-    # plt.close('all')
+    plt.close('all')
 
     '''Solution 2: using canvas.tostring_argb()'''
     # hm = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
@@ -119,16 +135,32 @@ def get_obs_flattened(
     bound: float = 1000,            # boundary of the area, default = 1.5 km
     grid_size: float = 50,          # grid size of the heatmap, default = 20 m
     grid_norm: float = 20,          # normalization for # of users in a grid
+    mode: str = "marl",             # ["sarl", "marl"]
     **kwargs
 ) -> np.ndarray:                    # the heatmap of all network entities
+    """Return the observation of an agent.
+
+    Args:
+        mode=="marl": multi-agent scenario
+        mode=="sarl": single-agent scenario
+
+    Returns:
+        Flattened observation (user heatmap + relative positions of BSs).
+    """
     obs = list()
     n_grids = int(1 + np.floor((2 * bound - 1) / grid_size))
     # hm = np.zeros(shape=(n_grids, n_grids))
     hm = 1e-6 * rng.uniform(size=(n_grids, n_grids))         # random noise
-    keys = ['self', 'uav', 'mbs']
+    if mode == "marl":
+        keys = ['self', 'uav', 'mbs']
+    elif mode == "sarl":
+        keys = ['self']
 
     if locs == {}:
-        return rng.uniform(size=(n_grids * n_grids + 2 * (kwargs['n_uavs'] + kwargs['n_mbss']),))
+        if mode == "marl":
+            return rng.uniform(size=(n_grids * n_grids + 2 * (kwargs['n_uavs'] + kwargs['n_mbss']),))
+        elif mode == "sarl":
+            return rng.uniform(size=(n_grids * n_grids + 2,))
 
     for key in keys:
         for i in range(locs[key].shape[-1]):
