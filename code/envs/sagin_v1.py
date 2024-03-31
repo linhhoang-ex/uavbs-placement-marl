@@ -169,17 +169,17 @@ class raw_env(AECEnv):
     def __init__(self, bound=1000, n_uavs=3, n_mbss=1, uav_altitude=120,
                  uav_velocity=25, continuous=False, render_mode=None,
                  hotspots=None, max_cycles=512, drate_threshold=20e6,
-                 local_reward_ratio=0.2, drate_reward_ratio=0.2, seed=None,
+                 local_reward_ratio=0.2, drate_reward_ratio=0, seed=None,
                  uav_init_mode='random', uav_init_locs=None,
-                 link_assignment='greedy (drate)',
+                 link_assignment='greedy (drate)', fading=True,
                  user_mode='stationary', user_velocity=0):
         '''
         Params
         ------
-        uav_init_mode: ['random', 'kmeans', 'specific']
+        uav_init_mode: in ['random', 'kmeans', 'specific']
             If uav_init_mode == 'specific', uav_init_locs must be defined.
 
-        link_assignment: ["greedy (drate)", "kmeans"]
+        link_assignment: in ["greedy (drate)", "kmeans"]
             "greedy (drate)": assign users to the BS with the strongest signal
             "kmeans": using k-means clustering to assign users to BSs
 
@@ -187,6 +187,8 @@ class raw_env(AECEnv):
             If user_mode is not "stationary", user_velocity (>0) must be defined.
             "stationary": no movements
             "random walk": random walk model with 9 degrees of freedom \n
+
+        fading (bool, optional): whether fading is considered in communications.
         '''
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
@@ -200,7 +202,7 @@ class raw_env(AECEnv):
         self.link_assignment = link_assignment
         self.user_mode = user_mode
         self.user_velocity = user_velocity
-
+        self.fading = fading
         self.local_rw_ratio = local_reward_ratio
         self.drate_rw_ratio = drate_reward_ratio
         self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
@@ -579,10 +581,10 @@ class raw_env(AECEnv):
         for i in range(self.n_mbss + self.n_uavs):
             h_dist_ = get_horizontal_dist(bs_locs[:, i], user_locs)
             if i < self.n_mbss:
-                snr_ = get_snr_macrobs_db(self.np_random, h_dist_)[0]
+                snr_ = get_snr_macrobs_db(self.np_random, h_dist_, fading=self.fading)[0]
                 drates_map[i, :] = get_drate_bps(snr_, 'mbs')
             else:
-                snr_ = get_snr_uavbs_db(self.np_random, h_dist_)[0]
+                snr_ = get_snr_uavbs_db(self.np_random, h_dist_, fading=self.fading)[0]
                 drates_map[i, :] = get_drate_bps(snr_, 'uav')
 
         return drates_map
