@@ -69,7 +69,8 @@ def get_snr_macrobs_db(
     '''Calculate the path loss [dB] and SNR [dB] for each user via the macro BS's link.
 
     References:
-    - https://www.arib.or.jp/english/html/overview/doc/STD-T63v9_20/5_Appendix/Rel5/25/25942-530.pdf
+    - 3GPP TR 25.942, Section 5.1.4 Description of the propagation models
+    https://portal.3gpp.org/desktopmodules/Specifications/SpecificationDetails.aspx?specificationId=1362
     - https://en.wikipedia.org/wiki/Coherence_time_(communications_systems) (coherent time)
     '''
     h_dist = np.maximum(h_dist, 1)          # at leat 1 m (the reference dist), avoid log(0)
@@ -145,7 +146,7 @@ def convert_from_dB(val_dB):
 
 
 def env(**kwargs):
-    env = raw_env(**kwargs)
+    env = MultiDroneEnv(**kwargs)
     if env.continuous:
         env = wrappers.ClipOutOfBoundsWrapper(env)
     else:
@@ -157,7 +158,7 @@ def env(**kwargs):
 parallel_env = parallel_wrapper_fn(env)
 
 
-class raw_env(AECEnv):
+class MultiDroneEnv(AECEnv):
     metadata = {
         "name": "sagin_v1.1",
         "description": "AEC version (turn-based games)",
@@ -704,19 +705,19 @@ class raw_env(AECEnv):
         else:
             n_satisfied_score = 0
 
-        # if new_kpis['drate_avg'] > old_kpis['drate_avg']:
-        #     drate_score = 1
-        # elif new_kpis['drate_avg'] < old_kpis['drate_avg']:
-        #     drate_score = -1
-        # else:
-        #     drate_score = 0
+        if new_kpis['drate_avg'] > old_kpis['drate_avg']:
+            drate_score = 1
+        elif new_kpis['drate_avg'] < old_kpis['drate_avg']:
+            drate_score = -1
+        else:
+            drate_score = 0
 
-        # return (1 - self.drate_rw_ratio) * n_satisfied_score\
-        #     + self.drate_rw_ratio * drate_score
+        return (1 - self.drate_rw_ratio) * n_satisfied_score\
+            + self.drate_rw_ratio * drate_score
 
         # return new_kpis['n_satisfied'] - old_kpis['n_satisfied']
 
-        return n_satisfied_score
+        # return n_satisfied_score
 
     def get_local_rewards(self, new_kpis: Dict[str, np.ndarray]) -> np.ndarray:
         old_kpis = self.infos['global']
@@ -741,8 +742,6 @@ class raw_env(AECEnv):
         return (1 - self.drate_rw_ratio) * n_users_scores\
             + self.drate_rw_ratio * drate_scores
 
-        # return n_users_scores
-
     def get_rewards(self, new_kpis: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         global_rewards = self.get_global_reward(new_kpis)
         local_rewards = self.get_local_rewards(new_kpis)
@@ -764,7 +763,7 @@ class SingleDroneEnv(gymnasium.Env):
         hotspots=None, max_cycles=512, drate_threshold=20e6,
         drate_reward_ratio=1, step_penalty=0.05, seed=None,
         uav_init_mode='random', uav_init_locs=None,
-        d_terminate=15
+        d_terminate=15, fading: bool = True
     ):
         """
         Params
@@ -786,6 +785,7 @@ class SingleDroneEnv(gymnasium.Env):
         self.step_penalty = step_penalty
         self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
         self.d_terminate = d_terminate  # Terminate condition, distance(drone, hotspot)
+        self.fading = fading
 
         self.obs_shape = get_obs_flattened(
             locs={},
@@ -911,7 +911,7 @@ class SingleDroneEnv(gymnasium.Env):
 
     def get_kpis(self):
         hdist_ = get_horizontal_dist(self.locs['self'], self.locs['user'])
-        snr_ = get_snr_uavbs_db(self.np_random, hdist_, fading=False)[0]
+        snr_ = get_snr_uavbs_db(self.np_random, hdist_, fading=self.fading)[0]
         drates = get_drate_bps(snr_, 'uav')
         kpis = {
             'drates': drates,
