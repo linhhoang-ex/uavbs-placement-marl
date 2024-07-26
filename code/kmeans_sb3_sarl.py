@@ -23,7 +23,8 @@ class Kmeans_SB3_Agent:
         self,
         user_locs: np.ndarray,
         mbs_locs: np.ndarray,
-        uav_locs: np.ndarray
+        uav_locs: np.ndarray,
+        deterministic: bool = False,
     ):
         # re-cluster users to base stations
         bs_locs = np.concatenate((mbs_locs, uav_locs), axis=1)
@@ -43,7 +44,7 @@ class Kmeans_SB3_Agent:
                 'user': user_locs[:, labels == cluster_id]
             }
             observation = get_obs_flattened(locs=locs, mode="sarl")
-            action, _ = self.model.predict(observation)
+            action, _ = self.model.predict(observation, deterministic=deterministic)
             actions[agent] = action.item()
 
         return actions
