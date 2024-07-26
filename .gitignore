@@ -166,6 +166,15 @@ cython_debug/
 code/runs/*
 # temporary: !code/runs/selected
 code/tmp/*
-code/cmp/*
+code/comp/*
 code/trained_agents/*
 # temporary: !code/trained_agents/selected
+
+code/sarl/runs/*
+!code/sarl/runs/stable/*
+code/sarl/images/*
+!code/sarl/images/stable*
+code/sarl/trained_agents/*
+!code/sarl/trained_agents/stable*
+
+*copy*
