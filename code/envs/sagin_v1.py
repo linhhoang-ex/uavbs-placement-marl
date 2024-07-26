@@ -1,5 +1,7 @@
 import numpy as np
 from typing import Dict, Any, Tuple, List
+import matplotlib
+from matplotlib import animation
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 # import functools
@@ -173,7 +175,7 @@ class MultiDroneEnv(AECEnv):
                  local_reward_ratio=0.2, drate_reward_ratio=0, seed=None,
                  uav_init_mode='random', uav_init_locs=None,
                  link_assignment='greedy (drate)', fading=True,
-                 user_mode='stationary', user_velocity=0):
+                 user_mode='stationary', user_velocity=0, animation=False):
         '''
         Params
         ------
@@ -190,6 +192,9 @@ class MultiDroneEnv(AECEnv):
             "random walk": random walk model with 9 degrees of freedom \n
 
         fading (bool, optional): whether fading is considered in communications.
+
+        animation: if True, the env will log KPI stats of all users and UAVs to\
+            plot animations in the end (require more memory and longer running time).
         '''
         self.bound = bound      # boundary [m] of the area, x, y in range [-bound, bound]
         self.n_uavs = n_uavs    # Number of drone base stations
@@ -207,6 +212,7 @@ class MultiDroneEnv(AECEnv):
         self.local_rw_ratio = local_reward_ratio
         self.drate_rw_ratio = drate_reward_ratio
         self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
+        self.animation = animation
 
         self.agents = ["uav_" + str(r) for r in range(self.n_uavs)]
         self.possible_agents = self.agents[:]
@@ -349,6 +355,13 @@ class MultiDroneEnv(AECEnv):
             kpis = self.get_drates_and_link_assignment_kmeans()
         self.infos['global'] = kpis
 
+        # For plotting animations
+        if self.animation is True:
+            self.log_uav_locs = [self.unwrapped.locs['uav'].copy()]
+            self.log_user_locs = [self.unwrapped.locs['user'].copy()]
+            self.log_satisfied = [self.unwrapped.infos['global']['satisfied'].copy()]
+            self.log_bs_mapping = [self.unwrapped.infos['global']['bs_mapping'].copy()]
+
         # No. of steps elapsed in the episode, for truncation condition
         self.n_steps = 0
 
@@ -383,6 +396,13 @@ class MultiDroneEnv(AECEnv):
             # self.infos = dict(zip(self.agents, [{} for _ in self.agents]))
             self.infos['global'] = new_kpis
 
+            # For plotting animations: update logs right after calculating KPIs
+            if self.animation is True:
+                self.log_uav_locs.append(self.unwrapped.locs['uav'].copy())
+                self.log_user_locs.append(self.unwrapped.locs['user'].copy())
+                self.log_satisfied.append(self.unwrapped.infos['global']['satisfied'].copy())
+                self.log_bs_mapping.append(self.unwrapped.infos['global']['bs_mapping'].copy())
+
             # Update locations of users
             self.move_users()
 
@@ -403,6 +423,64 @@ class MultiDroneEnv(AECEnv):
 
     def render(self):
         pass
+
+    def plot_animation(self, filename, legend=True, figsize=(6, 6), fontsize=None,
+                       markersize=5, linewidth=None, interval=100):
+        '''Plot an animation after the environment is terminated/truncated,
+        illustrating the network condition w.r.t movements of UAVs'''
+        assert self.animation is True, "animation should be enabled (True) when initialize the env"
+        markers = {True: "o", False: "v"}       # satisfied vs unsatisfied
+        colors = list(matplotlib.colors.TABLEAU_COLORS)   # encoded for different base stations
+
+        mbs_locs = self.unwrapped.locs['mbs']           # shape=(2, n_mbss)
+        log_user_locs = np.array(self.log_user_locs)    # shape=(n_steps, 2, n_users)
+        log_uav_locs = np.array(self.log_uav_locs)      # shape=(n_steps, 2, n_uavs)
+        log_satisfied = np.array(self.log_satisfied)    # shape=(n_steps, n_users)
+        log_bs_mapping = np.array(self.log_bs_mapping)  # shape=(n_steps, n_users)
+
+        n_mbss = mbs_locs.shape[-1]
+        n_uavs = log_uav_locs.shape[-1]
+        n_users = log_user_locs.shape[-1]
+
+        fig = plt.figure(figsize=figsize)
+        ax = fig.gca()
+
+        offset = 40
+        ax.set_xlim(-1000 - offset, 1000 + offset)
+        ax.set_ylim(-1000 - offset, 1000 + offset)
+        plt.xticks(fontsize=fontsize)
+        plt.yticks(fontsize=fontsize)
+        ax.grid(visible=True, linestyle=':')
+
+        imgs = []
+        for t in np.arange(self.n_steps - 1):
+            artist = plt.plot(
+                mbs_locs[0][0], mbs_locs[1][0], 's', color=colors[0],
+                mec='k', mew=0.8, markersize=markersize + 2, label='mBS'
+            )
+
+            for i in range(n_users):
+                if log_satisfied[t][i] is True:
+                    artist.append(ax.plot(
+                        log_user_locs[t][0][i], log_user_locs[t][1][i], marker=markers[log_satisfied[t][i]],
+                        markerfacecolor="None", color=colors[log_bs_mapping[t][i]], markersize=markersize
+                    )[0])
+                else:
+                    artist.append(ax.plot(
+                        log_user_locs[t][0][i], log_user_locs[t][1][i], marker=markers[log_satisfied[t][i]],
+                        color=colors[log_bs_mapping[t][i]], markersize=markersize
+                    )[0])
+
+            for uav_id in range(n_uavs):
+                artist.append(ax.plot(
+                    log_uav_locs[t][0][uav_id], log_uav_locs[t][1][uav_id], 's', color=colors[n_mbss + uav_id],
+                    mec='k', mew=0.8, markersize=markersize + 2, label=f"UAV {uav_id}"
+                )[0])
+
+            imgs.append(artist)
+
+        ani = animation.ArtistAnimation(fig=fig, artists=imgs, interval=interval, repeat_delay=3000, blit=True)
+        ani.save(filename=filename, writer="pillow")
 
     def close(self):
         '''Close any resources that should be released.'''
@@ -464,6 +542,7 @@ class MultiDroneEnv(AECEnv):
         return gen_hist2d(self.locs)
 
     def gen_mbs_loc(self) -> np.ndarray:
+        '''Return: shape=(2, n_mbss)'''
         assert self.n_mbss == 1, "Currently support one MBS only"
         return np.array([self.bound - 1, self.bound - 1]).reshape(2, -1)
 
@@ -646,6 +725,7 @@ class MultiDroneEnv(AECEnv):
 
         # For tracking KPIs
         drate_avg = drates.mean()
+        satisfied = drates >= self.drate_threshold
         n_satisfied = np.sum(drates >= self.drate_threshold)
         avg_drates_by_uavbs, n_users_by_uavbs = self.get_stats_on_uavbs(
             drates=drates, bs_mapping=bs_mapping
@@ -654,6 +734,7 @@ class MultiDroneEnv(AECEnv):
             'drates': drates,           # shape=(n_users,)
             'drates_map': drates_map,   # shape=(n_bss, n_users)
             'bs_mapping': bs_mapping,   # shape=(n_users,)
+            'satisfied': satisfied,     # shape=(n_users,)
             'drate_avg': drate_avg,
             'n_satisfied': n_satisfied,
             'avg_drates_by_uavbs': avg_drates_by_uavbs,
