@@ -844,7 +844,8 @@ class SingleDroneEnv(gymnasium.Env):
         hotspots=None, max_cycles=512, drate_threshold=20e6,
         drate_reward_ratio=1, step_penalty=0.05, seed=None,
         uav_init_mode='random', uav_init_locs=None,
-        d_terminate=15, fading: bool = True
+        d_terminate=15, fading: bool = True, stddev=300, n_users=100,
+        grid_size=50, grid_norm=20
     ):
         """
         Params
@@ -867,6 +868,13 @@ class SingleDroneEnv(gymnasium.Env):
         self.drate_threshold = drate_threshold  # satisfactory data rate level in bps
         self.d_terminate = d_terminate  # Terminate condition, distance(drone, hotspot)
         self.fading = fading
+        self.render_mode = render_mode
+        self.stddev = stddev
+        self.n_users = n_users
+        self.grid_size = grid_size
+        self.grid_norm = grid_norm
+
+        assert self.n_uavs == 1, "n_uavs must be one (single-agent scenario)"
 
         self.obs_shape = get_obs_flattened(
             locs={},
@@ -874,9 +882,6 @@ class SingleDroneEnv(gymnasium.Env):
             n_mbss=self.n_mbss,
             mode="sarl"
         ).shape         # observation shape of one agent
-        self.render_mode = render_mode
-
-        assert self.n_uavs == 1, "n_uavs must be one (single-agent scenario)"
 
         self.observation_space = gymnasium.spaces.Box(
             low=0,
@@ -925,6 +930,9 @@ class SingleDroneEnv(gymnasium.Env):
 
         observation = get_obs_flattened(
             locs=self.locs,
+            bound=self.bound,
+            grid_size=self.grid_size,
+            grid_norm=self.grid_norm,
             mode="sarl"
         )
         kpis = self.get_kpis()
@@ -946,6 +954,9 @@ class SingleDroneEnv(gymnasium.Env):
         self.info['kpis'] = new_kpis
         observation = get_obs_flattened(
             locs=self.locs,
+            bound=self.bound,
+            grid_size=self.grid_size,
+            grid_norm=self.grid_norm,
             mode="sarl"
         )
         terminated = np.all(
@@ -961,16 +972,23 @@ class SingleDroneEnv(gymnasium.Env):
 
     def gen_user_init_locs(self):
         rng = self.np_random
-        stddev = 300
-        n_users = 100
-        hotspot_loc = rng.uniform(-self.bound + stddev, self.bound - stddev, size=2)
+        stddev = self.stddev
+        n_users = self.n_users
+        bound = self.bound
+        hotspot_loc = rng.uniform(-bound + stddev, bound - stddev, size=2)
         xlocs = rng.normal(hotspot_loc[0], stddev, n_users)
         ylocs = rng.normal(hotspot_loc[1], stddev, n_users)
 
+        # Clipping user postions to be within the target area
+        xlocs = np.clip(xlocs, -bound, bound)
+        ylocs = np.clip(ylocs, -bound, bound)
+
         locs = np.asarray([xlocs, ylocs])
-        outliers = (locs[0] < -self.bound) | (locs[0] > self.bound)
-        outliers |= (locs[1] < -self.bound) | (locs[1] > self.bound)
-        locs = np.delete(locs, outliers, axis=1)
+
+        # Remove users locating out of bounds
+        # outliers = (locs[0] < -bound) | (locs[0] > bound)
+        # outliers |= (locs[1] < -bound) | (locs[1] > bound)
+        # locs = np.delete(locs, outliers, axis=1)
 
         return locs
 
@@ -1020,3 +1038,57 @@ class SingleDroneEnv(gymnasium.Env):
 
         return (1 - self.drate_rw_ratio) * n_satisfied_score\
             + self.drate_rw_ratio * drate_score - self.step_penalty
+
+
+class SingleDroneEnv_ContinuousSpace(SingleDroneEnv):
+    def __init__(
+        self, bound=250, n_uavs=1, n_mbss=1, uav_altitude=120, uav_velocity=10,
+        render_mode=None, hotspots=None, max_cycles=512, drate_threshold=20e6,
+        drate_reward_ratio=1, step_penalty=0.05, seed=None, uav_init_mode='random',
+        uav_init_locs=None, d_terminate=15, fading: bool = True, stddev=50,
+        n_users=25, grid_size=20, grid_norm=5
+    ):
+        super().__init__(
+            bound, n_uavs, n_mbss, uav_altitude, uav_velocity, render_mode,
+            hotspots, max_cycles, drate_threshold, drate_reward_ratio,
+            step_penalty, seed, uav_init_mode, uav_init_locs, d_terminate,
+            fading, stddev, n_users, grid_size, grid_norm
+        )
+
+        self.obs_shape = get_obs_flattened(
+            locs={},
+            bound=bound,
+            grid_size=grid_size,
+            grid_norm=grid_norm,
+            n_uavs=self.n_uavs,
+            n_mbss=self.n_mbss,
+            mode="sarl"
+        ).shape         # observation shape of one agent
+
+        self.observation_space = gymnasium.spaces.Box(
+            low=-1,
+            high=1,
+            shape=self.obs_shape,
+            dtype=np.float64,
+        )
+
+        self.action_space = gymnasium.spaces.Box(
+            low=-1,
+            high=1,
+            shape=(2,),             # (vx, vy)
+            dtype=np.float64
+        )
+
+    def move_uav(self, action: np.ndarray, clipping=True):
+        '''Update the location of the corresponding uav given an action'''
+        next_loc = self.locs['self'].flatten() + action.flatten() * self.uav_velocity   # shape=(2,)
+
+        if clipping is True:
+            next_loc = np.clip(next_loc, -self.bound, self.bound)
+        self.locs['self'] = next_loc.reshape(2, -1)
+
+    def get_reward(self, new_kpis):
+        old_kpis = self.info['kpis']
+        reward = self.n_users * (new_kpis['drate_avg'] - old_kpis['drate_avg'])
+
+        return reward
