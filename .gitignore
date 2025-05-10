@@ -22,17 +22,18 @@ venv.bak/
 
 # Auto-generated (PettingZoo) and temporary files
 *test.*
-code/runs/*
-!code/runs/stable
-code/tmp/*
-code/comp/*
-code/trained_agents/*
-!code/trained_agents/stable
-code/sarl/runs/*
-!code/sarl/runs/stable/*
-code/sarl/images/*
-!code/sarl/images/stable*
-code/sarl/trained_agents/*
-!code/sarl/trained_agents/stable*
-code/archive/
-code/figs/
+runs/*
+!runs/stable
+tmp/*
+comp/*
+trained_agents/*
+!trained_agents/stable
+sarl/runs/*
+!sarl/runs/stable/*
+sarl/images/*
+!sarl/images/stable*
+sarl/trained_agents/*
+!sarl/trained_agents/stable*
+archive/
+figs/
+envs/archive/
