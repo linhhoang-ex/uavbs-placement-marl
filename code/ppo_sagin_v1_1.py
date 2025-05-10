@@ -44,12 +44,18 @@ class Agent(nn.Module):
     def get_value(self, x):
         return self.critic(self.network(x / 1.0))
 
-    def get_action_and_value(self, x, action=None):
+    def get_action_and_value(self, x, action=None, deterministic: bool = False):
         hidden = self.network(x / 1.0)
         logits = self.actor(hidden)
         probs = Categorical(logits=logits)
         if action is None:
-            action = probs.sample()
+            if deterministic:
+                # Returns the most likely action (deterministic output) from
+                # the probability distribution
+                action = probs.mode
+            else:
+                action = probs.sample()
+
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
 
@@ -86,8 +92,8 @@ def unbatchify(x, env):
 
 
 if __name__ == "__main__":
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device('cuda')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"device: {device}")
     torch.set_default_dtype(torch.float64)
     writer = SummaryWriter()
 
@@ -97,18 +103,19 @@ if __name__ == "__main__":
     clip_coef = 0.1
     gamma = 0.99
     batch_size = 32
-    # stack_size = 1
-    # frame_size = (64, 64)
-    max_cycles = 128
-    total_episodes = 30000
+    max_cycles = 256
+    total_episodes = 20_000
     lrate = 1e-3
-    n_reuse = 3             # no. of reuse times for the experiment of an episode
+    n_reuse = 3      # no. of reuse times for the experiment of an episode
 
     """ ENV SETUP """
-    env = parallel_env(seed=None, max_cycles=max_cycles)
-    # env = color_reduction_v0(env)
-    # env = resize_v1(env, frame_size[0], frame_size[1])
-    # env = frame_stack_v1(env, stack_size=stack_size)
+    env = parallel_env(
+        seed=None,
+        max_cycles=max_cycles,
+        fading=True,
+        local_reward_ratio=0,
+        drate_reward_ratio=0,
+    )
     num_agents = len(env.possible_agents)
     num_actions = env.action_space(env.possible_agents[0]).n
     obs_shape = env.observation_space(env.possible_agents[0]).shape
