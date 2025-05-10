@@ -2,27 +2,42 @@ This repository hosts the source code of the paper "[Multi-Agent Reinforcement L
 
 The basic idea is to utilize multi-agent reinforcement learning to optimize the real-time cooperative placement/trajectory of a fleet of UAV-mounted base stations (BSs). These aerial BSs are deployed to support the terrestrial/macro base station in serving some remote users who are experiencing inadequate downlink rates.
 
-<figure style="text-align: center">
+<!-- <figure style="text-align: center">
     <img src="figs/animation.gif" alt="UAV trajectory animation" style="width: 400px; display: block; margin-left: auto; margin-right: auto;">
     <figcaption>Figure: Trajectory of 3 UAVs (the red, green, and orange squares) which are deployed to complement the macro BS (the blue square placed in the top-right corner).</figcaption>
-</figure>
+</figure> -->
+
+<p align="center">
+  <img src="figs/animation.gif"  width="400px"><br>
+  <em style="width: 600px">Figure: Trajectory of 3 UAVs (the red, green, and orange squares) which are deployed to complement the macro BS (the blue square placed in the top-right corner</em>
+</p>
 
 In the above simulation, the three UAVs are controlled by a post-trained multi-agent reinforcement learning (MARL) model. During the UAV flight, users are automatically assigned to the terrestrial/aerial BS with the strongest signal, which are presented by their time-varying color. Users with inadequate downlink rates are marked by triangles.
 
 # How it works
 Please follow section "Proposed Solution" in the mentioned paper (which is open-access) for detail. The following figures provide a visual explanation that complements the text in the paper.
 
-<div style="display: flex; justify-content: center;">
+<!-- <div style="display: flex; justify-content: center;">
   <figure style="margin: 0;">
-    <img src="figs/movements_20k_run2.png" alt="Description of first image" style="max-width: 250px;">
+    <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="max-width: 250px;">
     <figcaption style="text-align: center; max-width: 250px">3 UAVs w/ random initial positions.</figcaption>
   </figure>
 
   <figure style="margin: 0;">
-    <img src="figs/observations_20k_run2.png" alt="Description of second image" style="max-width: 670px;">
-    <figcaption style="text-align: center;">Observations of the 3 agents (in the last step) with the proposed MARL approach.</figcaption>
+    <img src="figs/observations_20k_run2.png" alt="Observations of 3 UAVs" style="max-width: 670px;">
+    <figcaption style="text-align: center;">Observations of the 3 UAVs (in the last step) with the proposed MARL approach.</figcaption>
   </figure>
-</div>
+</div> -->
+
+<p align="center">
+  <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="max-width: 300px"><br>
+  <em style="max-width: 400px">Trajectory of 3 UAVs with random initial positions.</em>
+</p>
+
+<p align="center">
+  <img src="figs/observations_20k_run2.png" alt="Observations of 3 UAVs" style="max-width: 650px"><br>
+  <em style="max-width: 650px">Observations of the 3 UAVs (in the last step) with the proposed MARL approach.</em>
+</p>
 
 # Repository structure
 - [`envs/`](envs): scripts and utilities for setting up the RL environments, following the [Gymnasium](https://gymnasium.farama.org/) (for single-agent RL) and [PettingZoo](https://pettingzoo.farama.org/index.html) (for multi-agent RL) API standard.
