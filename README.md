@@ -35,8 +35,8 @@ Please follow section "Proposed Solution" in the mentioned paper (which is open-
 </p> -->
 
 <p align="center">
-  <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="width: 230px">
-  <img src="figs/observations_20k_run2.png" alt="Observations of 3 UAVs" style="width: 600px"><br>
+  <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="width: 250px">
+  <img src="figs/observations_20k_run2.png" alt="Observations of 3 UAVs" style="width: 670px"><br>
   <em style="max-width: 650px">Observations of the 3 UAVs (in the last step) with the proposed MARL approach.</em>
 </p>
 
