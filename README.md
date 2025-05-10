@@ -8,8 +8,8 @@ The basic idea is to utilize multi-agent reinforcement learning to optimize the 
 </figure> -->
 
 <p align="center">
-  <img src="figs/animation.gif"  width="400px"><br>
-  <em style="width: 600px">Figure: Trajectory of 3 UAVs (the red, green, and orange squares) which are deployed to complement the macro BS (the blue square placed in the top-right corner</em>
+  <img src="figs/animation.gif"  width="380px"><br>
+  <em style="width: 400px">Figure: Trajectory of 3 UAVs (the red, green, and orange squares) which are deployed to complement the macro BS (the blue square placed in the top-right corner</em>
 </p>
 
 In the above simulation, the three UAVs are controlled by a post-trained multi-agent reinforcement learning (MARL) model. During the UAV flight, users are automatically assigned to the terrestrial/aerial BS with the strongest signal, which are presented by their time-varying color. Users with inadequate downlink rates are marked by triangles.
@@ -29,13 +29,14 @@ Please follow section "Proposed Solution" in the mentioned paper (which is open-
   </figure>
 </div> -->
 
-<p align="center">
-  <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="max-width: 300px"><br>
+<!-- <p align="center">
+  <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="max-width: 250px"><br>
   <em style="max-width: 400px">Trajectory of 3 UAVs with random initial positions.</em>
-</p>
+</p> -->
 
 <p align="center">
-  <img src="figs/observations_20k_run2.png" alt="Observations of 3 UAVs" style="max-width: 650px"><br>
+  <img src="figs/movements_20k_run2.png" alt="UAV Trajectory with random initial locations" style="width: 230px">
+  <img src="figs/observations_20k_run2.png" alt="Observations of 3 UAVs" style="width: 600px"><br>
   <em style="max-width: 650px">Observations of the 3 UAVs (in the last step) with the proposed MARL approach.</em>
 </p>
 
