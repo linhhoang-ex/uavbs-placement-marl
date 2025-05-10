@@ -17,4 +17,7 @@ dependencies:
   - tensorboard
   - pandas
   - ipywidgets
+  - numpy
+  - scipy
+  - openpyxl
 prefix: C:\Users\linhh\anaconda3\envs\gymnasium-env
