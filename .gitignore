@@ -35,5 +35,4 @@ sarl/images/*
 sarl/trained_agents/*
 !sarl/trained_agents/stable*
 archive/
-figs/
 envs/archive/
