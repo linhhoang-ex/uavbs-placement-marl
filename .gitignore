@@ -34,5 +34,5 @@ code/sarl/images/*
 !code/sarl/images/stable*
 code/sarl/trained_agents/*
 !code/sarl/trained_agents/stable*
-archive/
-fig/
+code/archive/
+code/figs/
